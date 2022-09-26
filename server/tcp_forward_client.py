@@ -4,17 +4,13 @@ import select
 import socket
 import traceback
 import uuid
-from threading import Thread, Lock
 from functools import partial
-import nest_asyncio
+from threading import Thread, Lock
 from typing import Dict
-
-import tornado
 
 from common.logger_factory import LoggerFactory
 from constant.message_type_constnat import MessageTypeConstant
 from entity.message.message_entity import MessageEntity
-l = Lock()
 
 
 class TcpForwardClient:
@@ -26,15 +22,13 @@ class TcpForwardClient:
         self.is_running: bool = True
         self.socket: socket.socket = None
         self.uid_to_client: Dict[str, socket.socket] = dict()
-        self.client_to_uid: Dict[ socket.socket, str] = dict()
+        self.client_to_uid: Dict[socket.socket, str] = dict()
         self.loop = loop
         self.tornado_loop = tornado_loop
         self.send_lock = Lock()
 
-
     def start_listen_message(self):
         asyncio.set_event_loop(self.loop)
-        nest_asyncio.apply()
 
         while self.is_running:
             s_list = list(self.client_to_uid.keys())
@@ -59,7 +53,8 @@ class TcpForwardClient:
                     self.client_to_uid.pop(each)
                     each.close()
                 try:
-                    self.tornado_loop.add_callback(partial(self.websocket_handler.write_message, json.dumps(send_message)))
+                    self.tornado_loop.add_callback(
+                        partial(self.websocket_handler.write_message, json.dumps(send_message)))
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
 
