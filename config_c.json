@@ -1,0 +1,22 @@
+{
+  "server": {
+    "port": 18888,
+    "host": "192.168.32.229",
+    "https": false,
+    "password": "helloworld"
+  },
+  "client": [
+    {
+      "name": "ssh",
+      "remote_port": 1222,
+      "local_port": 22,
+      "local_ip": "127.0.0.1"
+    },
+    {
+      "name": "mongo",
+      "remote_port": 1223,
+      "local_port": 27017,
+      "local_ip": "127.0.0.1"
+    }
+  ]
+}
