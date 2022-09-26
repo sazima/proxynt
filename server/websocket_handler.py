@@ -34,7 +34,6 @@ class MyWebSocketaHandler(WebSocketHandler):
         return password == request_password
 
     def open(self, *args: str, **kwargs: str):
-        self.send_lock = Lock()
         password = self.get_argument('password', '')
         if not self._check_password(password):
             LoggerFactory.get_logger().error('invalid password')
@@ -42,9 +41,10 @@ class MyWebSocketaHandler(WebSocketHandler):
             raise InvalidPassword()
         LoggerFactory.get_logger().info('new open websocket')
 
-    def write_message(self, message, binary=False):
+    async def write_message(self, message, binary=False):
         try:
-            return super(MyWebSocketaHandler, self).write_message(message, binary)
+            await (super(MyWebSocketaHandler, self).write_message(message, binary))
+            return
         except Exception:
             LoggerFactory.get_logger().info(message)
             LoggerFactory.get_logger().error(traceback.format_exc())
@@ -69,7 +69,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if d['name'] in name_set:
                         self.close(None, 'DuplicatedName')
                         raise DuplicatedName()
-                    client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop())
+                    client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop(), IOLoop.current())
                     this_name_to_tcp_forward_client[d['name']] = client
                     name_set.add(d['name'])
                 task_list: List[Thread] = []
@@ -86,6 +86,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.handler_to_names[self].add(name)
                 for t in task_list:
                     t.start()
+
     def on_close(self, code: int = None, reason: str = None) -> None:
         asyncio.ensure_future(self._on_close(code, reason))
 

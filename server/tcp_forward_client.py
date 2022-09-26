@@ -5,15 +5,20 @@ import socket
 import traceback
 import uuid
 from threading import Thread, Lock
+from functools import partial
+import nest_asyncio
 from typing import Dict
+
+import tornado
 
 from common.logger_factory import LoggerFactory
 from constant.message_type_constnat import MessageTypeConstant
 from entity.message.message_entity import MessageEntity
+l = Lock()
 
 
 class TcpForwardClient:
-    def __init__(self, websocket_handler: 'MyWebSocketaHandler', name: str, listen_port: int, loop):
+    def __init__(self, websocket_handler: 'MyWebSocketaHandler', name: str, listen_port: int, loop, tornado_loop):
         from server.websocket_handler import MyWebSocketaHandler
         self.websocket_handler = websocket_handler  # type: MyWebSocketaHandler
         self.name: str = name
@@ -23,11 +28,14 @@ class TcpForwardClient:
         self.uid_to_client: Dict[str, socket.socket] = dict()
         self.client_to_uid: Dict[ socket.socket, str] = dict()
         self.loop = loop
+        self.tornado_loop = tornado_loop
         self.send_lock = Lock()
 
 
     def start_listen_message(self):
         asyncio.set_event_loop(self.loop)
+        nest_asyncio.apply()
+
         while self.is_running:
             s_list = list(self.client_to_uid.keys())
             if not s_list:
@@ -51,14 +59,9 @@ class TcpForwardClient:
                     self.client_to_uid.pop(each)
                     each.close()
                 try:
-                    # asyncio.ensure_future(self._on_close(code, reason))
-                    with self.send_lock:
-                        self.websocket_handler.write_message(json.dumps(send_message))
+                    self.tornado_loop.add_callback(partial(self.websocket_handler.write_message, json.dumps(send_message)))
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
-                    # return
-                # if not recv:
-                #     return
 
     def start_accept(self):
         LoggerFactory.get_logger().info(f'start accept {self.listen_port}')
@@ -82,7 +85,10 @@ class TcpForwardClient:
     def send_to_socket(self, uid: str, message: bytes):
         if uid not in self.uid_to_client:
             return
-        self.uid_to_client[uid].send(message)
+        try:
+            self.uid_to_client[uid].send(message)
+        except OSError:
+            pass
 
     def bind_port(self):
         self.socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
