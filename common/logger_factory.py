@@ -5,6 +5,8 @@ from logging.handlers import TimedRotatingFileHandler
 
 from pytz import timezone
 
+from context.context_utils import ContextUtils
+
 
 class LoggerFactory:
     fmt = " %(asctime)s %(filename)s %(lineno)s %(funcName)s %(message)s"
@@ -15,7 +17,7 @@ class LoggerFactory:
     def get_logger(cls):
         if hasattr(cls, '_log'):
             return cls.logger
-        cls.logger.setLevel(logging.DEBUG)
+        cls.logger.setLevel(ContextUtils.get_log_level())
         cls._add_file_handler(cls.logger)
         cls._add_console_handler(cls.logger)
         cls._log = cls.logger
@@ -25,7 +27,7 @@ class LoggerFactory:
     @classmethod
     def _add_console_handler(cls, logger):
         handler = logging.StreamHandler()
-        handler.setLevel(logging.DEBUG)
+        cls.logger.setLevel(ContextUtils.get_log_level())
         handler.setFormatter(logging.Formatter(cls.fmt))
         logger.addHandler(handler)
 

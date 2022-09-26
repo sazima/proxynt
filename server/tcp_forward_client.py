@@ -4,7 +4,7 @@ import select
 import socket
 import traceback
 import uuid
-from threading import Thread
+from threading import Thread, Lock
 from typing import Dict
 
 from common.logger_factory import LoggerFactory
@@ -23,6 +23,8 @@ class TcpForwardClient:
         self.uid_to_client: Dict[str, socket.socket] = dict()
         self.client_to_uid: Dict[ socket.socket, str] = dict()
         self.loop = loop
+        self.send_lock = Lock()
+
 
     def start_listen_message(self):
         asyncio.set_event_loop(self.loop)
@@ -49,7 +51,9 @@ class TcpForwardClient:
                     self.client_to_uid.pop(each)
                     each.close()
                 try:
-                    self.websocket_handler.write_message(json.dumps(send_message))
+                    # asyncio.ensure_future(self._on_close(code, reason))
+                    with self.send_lock:
+                        self.websocket_handler.write_message(json.dumps(send_message))
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
                     # return

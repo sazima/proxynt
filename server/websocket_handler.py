@@ -34,6 +34,7 @@ class MyWebSocketaHandler(WebSocketHandler):
         return password == request_password
 
     def open(self, *args: str, **kwargs: str):
+        self.send_lock = Lock()
         password = self.get_argument('password', '')
         if not self._check_password(password):
             LoggerFactory.get_logger().error('invalid password')
@@ -45,8 +46,8 @@ class MyWebSocketaHandler(WebSocketHandler):
         try:
             return super(MyWebSocketaHandler, self).write_message(message, binary)
         except Exception:
+            LoggerFactory.get_logger().info(message)
             LoggerFactory.get_logger().error(traceback.format_exc())
-            a = 3
 
     async def on_message(self, message):
         message_dict: MessageEntity = json.loads(message)

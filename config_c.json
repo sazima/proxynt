@@ -1,7 +1,7 @@
 {
   "server": {
     "port": 18888,
-    "host": "192.168.32.229",
+    "host": "192.168.9.224",
     "https": false,
     "password": "helloworld"
   },

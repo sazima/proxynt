@@ -2,6 +2,7 @@ c = {}
 
 
 class ContextUtils:
+    _log_level = '_log_level'
     _port = '_port'
     _password_key = '_password_key'
 
@@ -20,3 +21,11 @@ class ContextUtils:
     @classmethod
     def get_port(cls):
         return c[cls._port]
+
+    @classmethod
+    def set_log_level(cls, data):
+        c[cls._log_level] = data
+
+    @classmethod
+    def get_log_level(cls) -> int:
+        return c[cls._log_level]
