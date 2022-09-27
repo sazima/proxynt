@@ -32,7 +32,7 @@ python run_server.py -c config_s.json
 然后启动: 
 `python run_server.py -c config_s.json `
 
-#### 2. 在需要被访问的电脑上配置`config_c.json`
+#### 2. 在需要被访问的内网电脑上配置`config_c.json`
  配置config_c.json
  
 ```json
