@@ -3,7 +3,8 @@
     "port": 18888,
     "host": "192.168.9.224",
     "https": false,
-    "password": "helloworld"
+    "password": "helloworld",
+    "path": "/websocket_path"
   },
   "client": [
     {

@@ -22,7 +22,6 @@ from exceptions.invalid_password import InvalidPassword
 from server.tcp_forward_client import TcpForwardClient
 
 
-@request_mapping("/ws")
 class MyWebSocketaHandler(WebSocketHandler):
     name_to_tcp_forward_client: Dict[str, TcpForwardClient] = {}
     handler_to_names: Dict['MyWebSocketaHandler', Set[str]] = defaultdict(set)

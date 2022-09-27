@@ -1,4 +1,5 @@
 {
   "port": 18888,
-  "password": "helloworld"
+  "password": "helloworld",
+  "path": "/websocket_path"
 }

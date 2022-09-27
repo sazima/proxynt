@@ -24,7 +24,7 @@ name_to_level = {
 }
 
 
-def load_config():
+def load_config() -> ServerConfigEntity:
     parser = OptionParser(usage="usage: %prog -c config_s.json ")
     parser.add_option("-c", "--config",
                       type='str',
@@ -53,6 +53,9 @@ def load_config():
     password = content_json.get('password', '')
     port = content_json.get('port', )
     path = content_json.get('path', DEFAULT_WEBSOCKET_PATH)
+    if not path.startswith('/'):
+        print('path should startswith "/" ')
+        sys.exit()
     if not port:
         raise Exception('server port is required')
     ContextUtils.set_password(password)
@@ -61,10 +64,10 @@ def load_config():
 
 
 if __name__ == "__main__":
-    load_config()
-    app = tornado.web.Application()
-    route = Route(app)
-    route.register(MyWebSocketaHandler)
+    server_config = load_config()
+    app = tornado.web.Application([
+        (ContextUtils.get_websocket_path(), MyWebSocketaHandler),
+    ])
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}..')
     tornado.ioloop.IOLoop.current().start()

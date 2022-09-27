@@ -9,6 +9,7 @@ class _ServerEntity(TypedDict):
 
     https: bool
     password: str
+    path: str
 
 
 class _ClientEntity(TypedDict):

@@ -107,6 +107,7 @@ def signal_handler(sig, frame):
     print('You pressed Ctrl+C!')
     sys.exit(0)
 
+
 if __name__ == "__main__":
     # websocket.enableTrace(True)
     config_data, name_to_addr = get_config()
@@ -118,7 +119,9 @@ if __name__ == "__main__":
         url += 'wss://'
     else:
         url += 'ws://'
-    url += server_config['host'] + ":" + str(server_config['port']) + "/ws?password=" + server_config['password']
+    url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}?password={server_config['password']}"
+
+    LoggerFactory.get_logger().info(f'start open {url}')
     ws = websocket.WebSocketApp(url,
                                 on_message=on_message,
                                 on_error=on_error,

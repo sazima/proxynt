@@ -1,5 +1,6 @@
 # 内网穿透工具
 
+
 客户端
 ```
 python run_client.py -c config_c.json
@@ -15,11 +16,12 @@ python run_server.py -c config_s.json
 
 假设公网机器的ip是 `192.168.9.224`
 
-#### 1. 在公网机器上配置`config_s.json`, 设置连接密码和接受客户端配置的端口
+#### 1. 在公网机器上配置`config_s.json`, 设置连接密码, 接受客户端配置的端口和websocket路径
 ```json
 {
   "port": 18888,
-  "password": "helloworld"
+  "password": "helloworld",
+  "path": "/websocket_path"
 }
 ```
 然后启动: 
@@ -27,13 +29,15 @@ python run_server.py -c config_s.json
 
 #### 2. 在需要被访问的电脑上配置`config_c.json`
  配置config_c.json
+ 
 ```json
 {
   "server": {
     "port": 18888,
     "host": "192.168.9.224",
     "https": false,
-    "password": "helloworld"
+    "password": "helloworld",
+    "path": "/websocket_path"
   },
   "client": [
     {
@@ -54,4 +58,7 @@ python run_server.py -c config_s.json
 ssh -oPort=12222 test@192.168.9.224
 ```
 
-# 介绍
+
+## 原理
+
+![原理](./image.png)
