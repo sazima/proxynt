@@ -2,6 +2,7 @@ c = {}
 
 
 class ContextUtils:
+    _websocket_path = '_websocket_path'
     _log_level = '_log_level'
     _port = '_port'
     _password_key = '_password_key'
@@ -29,3 +30,11 @@ class ContextUtils:
     @classmethod
     def get_log_level(cls) -> int:
         return c[cls._log_level]
+
+    @classmethod
+    def set_websocket_path(cls, path):
+        c[cls._websocket_path] = path
+
+    @classmethod
+    def get_websocket_path(cls):
+        return c[cls._websocket_path]

@@ -14,6 +14,7 @@ from server.websocket_handler import MyWebSocketaHandler
 
 DEFAULT_CONFIG = './config_s.json'
 DEFAULT_LOGGER_LEVEL = logging.INFO
+DEFAULT_WEBSOCKET_PATH = '/ws'
 
 name_to_level = {
     'debug': logging.DEBUG,
@@ -51,9 +52,11 @@ def load_config():
     content_json: ServerConfigEntity = json.loads(content_str)
     password = content_json.get('password', '')
     port = content_json.get('port', )
+    path = content_json.get('path', DEFAULT_WEBSOCKET_PATH)
     if not port:
         raise Exception('server port is required')
     ContextUtils.set_password(password)
+    ContextUtils.set_websocket_path(path)
     ContextUtils.set_port(int(port))
 
 
