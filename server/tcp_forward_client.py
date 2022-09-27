@@ -59,7 +59,7 @@ class TcpForwardClient:
                     LoggerFactory.get_logger().info('recv empty, close')
                     try:
                         self.close_connection(each)
-                    except (OSError, ValueError, KeyboardInterrupt):
+                    except (OSError, ValueError, KeyError):
                         LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
                 try:
                     self.tornado_loop.add_callback(
