@@ -1,16 +1,16 @@
-import ast
-import json
-import pickle
 import select
 import socket
 import time
-from threading import Thread, Lock
-from typing import List, Dict, Tuple, Set
+import traceback
+from threading import Lock
+from typing import Dict, Tuple
 
 import websocket
 
+from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
 from constant.message_type_constnat import MessageTypeConstant
+from constant.system_constant import SystemConstant
 from entity.message.message_entity import MessageEntity
 
 
@@ -38,7 +38,7 @@ class TcpForwardClient:
             for each in rs:
                 uid = self.socket_to_uid[each]
                 try:
-                    recv = each.recv(MessageTypeConstant.CHUNK_SIZE)
+                    recv = each.recv(SystemConstant.CHUNK_SIZE)
                 except OSError:
                     continue
                 send_message: MessageEntity = {
@@ -50,12 +50,16 @@ class TcpForwardClient:
                     }
                 }
                 start_time = time.time()
-                self.ws.send(pickle.dumps(send_message),  websocket.ABNF.OPCODE_BINARY)
+                self.ws.send(NatSerialization.dumps(send_message),  websocket.ABNF.OPCODE_BINARY)
                 LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
                 if not recv:
-                    self.uid_to_socket.pop(uid)
-                    self.socket_to_uid.pop(each)
-                    each.close()
+                    try:
+                        self.close_connection(each)
+                    except Exception:
+                        LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
+                    # self.uid_to_socket.pop(uid)
+                    # self.socket_to_uid.pop(each)
+                    # each.close()
 
     def create_socket(self, name: str, uid: str):
         with self.lock:
@@ -65,6 +69,11 @@ class TcpForwardClient:
                 self.uid_to_socket[uid] = s
                 self.socket_to_uid[s] = uid
                 self.uid_to_name[uid] = name
+
+    def close_connection(self, socket_client: socket.socket):
+        uid = self.socket_to_uid.pop(socket_client)
+        self.uid_to_socket.pop(uid)
+        socket_client.close()
 
     def close(self):
         with self.lock:
@@ -76,4 +85,8 @@ class TcpForwardClient:
             self.is_running = False
 
     def send_by_uid(self, uid, msg: bytes):
-        self.uid_to_socket[uid].send(msg)
+        s = self.uid_to_socket[uid]
+        if not msg:
+            LoggerFactory.get_logger().info('get empty message, close')
+            self.close_connection(s)
+        s.send(msg)

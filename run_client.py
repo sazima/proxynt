@@ -1,6 +1,5 @@
 import json
 import logging
-import pickle
 import signal
 import sys
 import time
@@ -10,6 +9,7 @@ from typing import List, Dict, Tuple, Set
 
 import websocket
 
+from common.nat_serialization import NatSerialization
 from client.tcp_forward_client import TcpForwardClient
 from common.logger_factory import LoggerFactory
 from constant.message_type_constnat import MessageTypeConstant
@@ -67,7 +67,7 @@ def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
 
 
 def on_message(ws, message: str):
-    message_data: MessageEntity = pickle.loads(message)
+    message_data: MessageEntity = NatSerialization.loads(message)
     start_time = time.time()
     time_ = message_data['type_']
     if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
@@ -98,7 +98,7 @@ def on_open(ws):
         'data': push_configs
     }
     forward_client.is_running = True
-    ws.send(pickle.dumps(message), websocket.ABNF.OPCODE_BINARY)
+    ws.send(NatSerialization.dumps(message), websocket.ABNF.OPCODE_BINARY)
     task = Thread(target=forward_client.start_forward)
     task.start()
 
@@ -107,8 +107,8 @@ def signal_handler(sig, frame):
     print('You pressed Ctrl+C!')
     sys.exit(0)
 
-
 if __name__ == "__main__":
+    # websocket.enableTrace(True)
     config_data, name_to_addr = get_config()
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)

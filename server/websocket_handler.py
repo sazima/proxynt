@@ -1,10 +1,8 @@
 import asyncio
-import pickle
 import time
 import traceback
 from asyncio import Lock
 from collections import defaultdict
-from concurrent.futures.thread import ThreadPoolExecutor
 from threading import Thread
 from typing import List, Dict, Set
 
@@ -12,6 +10,7 @@ from tornado.ioloop import IOLoop
 from tornado.websocket import WebSocketHandler
 from tornado_request_mapping import request_mapping
 
+from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
 from constant.message_type_constnat import MessageTypeConstant
 from context.context_utils import ContextUtils
@@ -21,8 +20,6 @@ from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
 from exceptions.invalid_password import InvalidPassword
 from server.tcp_forward_client import TcpForwardClient
-
-POOL = ThreadPoolExecutor(max_workers=100)
 
 
 @request_mapping("/ws")
@@ -64,12 +61,13 @@ class MyWebSocketaHandler(WebSocketHandler):
             LoggerFactory.get_logger().error('invalid password')
             self.close(reason='invalid password')
             raise InvalidPassword()
-        message_dict: MessageEntity = pickle.loads(message)
+        message_dict: MessageEntity = NatSerialization.loads(message)
         start_time = time.time()
         if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
             data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
             name = data['name']
             uid = data['uid']
+            # self.name_to_tcp_forward_client[name].uid_to_client[uid].send(data['data'])
             await self.name_to_tcp_forward_client[name].send_to_socket(uid, data['data'])
         elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
             async with self.lock:

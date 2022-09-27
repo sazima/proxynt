@@ -1,6 +1,4 @@
 import asyncio
-import json
-import pickle
 import select
 import socket
 import time
@@ -10,8 +8,10 @@ from functools import partial
 from threading import Thread, Lock
 from typing import Dict
 
+from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
 from constant.message_type_constnat import MessageTypeConstant
+from constant.system_constant import SystemConstant
 from entity.message.message_entity import MessageEntity
 
 
@@ -34,13 +34,16 @@ class TcpForwardClient:
             s_list = list(self.client_to_uid.keys())
             if not s_list:
                 continue
-            rs, ws, es = select.select(s_list, s_list, s_list, 1)
+            try:
+                rs, ws, es = select.select(s_list, s_list, s_list, 1)
+            except ValueError:
+                continue
             for each in rs:
                 # 发送到websocket
                 each: socket.socket
                 # LoggerFactory.get_logger().info(each.getpeername())
                 try:
-                    recv = each.recv(MessageTypeConstant.CHUNK_SIZE)
+                    recv = each.recv(SystemConstant.CHUNK_SIZE)
                 except ConnectionResetError:
                     recv = b''
                 uid = self.client_to_uid[each]
@@ -53,12 +56,14 @@ class TcpForwardClient:
                     }
                 }
                 if not recv:
-                    self.uid_to_client.pop(uid)
-                    self.client_to_uid.pop(each)
-                    each.close()
+                    LoggerFactory.get_logger().info('recv empty, close')
+                    try:
+                        self.close_connection(each)
+                    except (OSError, ValueError, KeyboardInterrupt):
+                        LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
                 try:
                     self.tornado_loop.add_callback(
-                        partial(self.websocket_handler.write_message, pickle.dumps(send_message)), True)
+                        partial(self.websocket_handler.write_message, NatSerialization.dumps(send_message)), True)
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
 
@@ -84,14 +89,23 @@ class TcpForwardClient:
     async def send_to_socket(self, uid: str, message: bytes):
         send_start_time = time.time()
         if uid not in self.uid_to_client:
-            LoggerFactory.get_logger().warn(f'{uid } not in ')
+            LoggerFactory.get_logger().warn(f'{message}, {uid } not in ')
             return
         try:
-            await asyncio.get_event_loop().sock_sendall(self.uid_to_client[uid], message)
+            socket_client = self.uid_to_client[uid]
+            if not message:
+                LoggerFactory.get_logger().info('empty message, close')
+                self.close_connection(socket_client)
+            await asyncio.get_event_loop().sock_sendall(socket_client, message)
         except OSError:
             LoggerFactory.get_logger().warn(f'{uid } os error')
             pass
         LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
+
+    def close_connection(self, socket_client: socket.socket):
+        socket_client.close()
+        uid = self.client_to_uid.pop(socket_client)
+        self.uid_to_client.pop(uid)
 
     def bind_port(self):
         self.socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
