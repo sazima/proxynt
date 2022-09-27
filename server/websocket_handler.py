@@ -8,7 +8,6 @@ from typing import List, Dict, Set
 
 from tornado.ioloop import IOLoop
 from tornado.websocket import WebSocketHandler
-from tornado_request_mapping import request_mapping
 
 from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
