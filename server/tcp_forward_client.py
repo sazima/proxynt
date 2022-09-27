@@ -17,6 +17,7 @@ from entity.message.message_entity import MessageEntity
 
 class TcpForwardClient:
     def __init__(self, websocket_handler: 'MyWebSocketaHandler', name: str, listen_port: int, loop, tornado_loop):
+        self.close_lock = Lock()
         from server.websocket_handler import MyWebSocketaHandler
         self.websocket_handler = websocket_handler  # type: MyWebSocketaHandler
         self.name: str = name
@@ -27,7 +28,6 @@ class TcpForwardClient:
         self.client_to_uid: Dict[socket.socket, str] = dict()
         self.loop = loop
         self.tornado_loop = tornado_loop
-        self.send_lock = Lock()
 
     def start_listen_message(self):
         while self.is_running:
@@ -89,7 +89,7 @@ class TcpForwardClient:
     async def send_to_socket(self, uid: str, message: bytes):
         send_start_time = time.time()
         if uid not in self.uid_to_client:
-            LoggerFactory.get_logger().warn(f'{message}, {uid } not in ')
+            LoggerFactory.get_logger().debug(f'{message}, {uid } not in ')
             return
         try:
             socket_client = self.uid_to_client[uid]
@@ -103,9 +103,12 @@ class TcpForwardClient:
         LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
     def close_connection(self, socket_client: socket.socket):
+        with self.close_lock:
+            if socket_client not in self.client_to_uid:
+                return
+            uid = self.client_to_uid.pop(socket_client)
+            self.uid_to_client.pop(uid)
         socket_client.close()
-        uid = self.client_to_uid.pop(socket_client)
-        self.uid_to_client.pop(uid)
 
     def bind_port(self):
         self.socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
