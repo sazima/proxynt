@@ -1,8 +1,10 @@
 import asyncio
-import json
+import pickle
+import time
 import traceback
 from asyncio import Lock
 from collections import defaultdict
+from concurrent.futures.thread import ThreadPoolExecutor
 from threading import Thread
 from typing import List, Dict, Set
 
@@ -19,6 +21,8 @@ from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
 from exceptions.invalid_password import InvalidPassword
 from server.tcp_forward_client import TcpForwardClient
+
+POOL = ThreadPoolExecutor(max_workers=100)
 
 
 @request_mapping("/ws")
@@ -42,21 +46,31 @@ class MyWebSocketaHandler(WebSocketHandler):
         LoggerFactory.get_logger().info('new open websocket')
 
     async def write_message(self, message, binary=False):
+        start_time = time.time()
         try:
             await (super(MyWebSocketaHandler, self).write_message(message, binary))
             return
         except Exception:
             LoggerFactory.get_logger().info(message)
             LoggerFactory.get_logger().error(traceback.format_exc())
+        LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}')
 
-    async def on_message(self, message):
-        message_dict: MessageEntity = json.loads(message)
+    def on_message(self, m_bytes):
+        asyncio.ensure_future(self.on_message_async(m_bytes))
+
+    async def on_message_async(self, message):
+        password = self.get_argument('password', '')
+        if not self._check_password(password):
+            LoggerFactory.get_logger().error('invalid password')
+            self.close(reason='invalid password')
+            raise InvalidPassword()
+        message_dict: MessageEntity = pickle.loads(message)
+        start_time = time.time()
         if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
             data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
             name = data['name']
             uid = data['uid']
-            self.name_to_tcp_forward_client[name].send_to_socket(uid, bytes.fromhex(data['data']))
-
+            await self.name_to_tcp_forward_client[name].send_to_socket(uid, data['data'])
         elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
             async with self.lock:
                 LoggerFactory.get_logger().info(f'get push config: {message_dict}')
@@ -65,11 +79,13 @@ class MyWebSocketaHandler(WebSocketHandler):
                 name_set = set()
                 for d in data:
                     if d['name'] in self.name_to_tcp_forward_client:
+                        self.close(None, 'DuplicatedName')
                         raise DuplicatedName()
                     if d['name'] in name_set:
                         self.close(None, 'DuplicatedName')
                         raise DuplicatedName()
-                    client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop(), IOLoop.current())
+                    client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop(),
+                                              IOLoop.current())
                     this_name_to_tcp_forward_client[d['name']] = client
                     name_set.add(d['name'])
                 task_list: List[Thread] = []
@@ -86,6 +102,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.handler_to_names[self].add(name)
                 for t in task_list:
                     t.start()
+
+        LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
 
     def on_close(self, code: int = None, reason: str = None) -> None:
         asyncio.ensure_future(self._on_close(code, reason))

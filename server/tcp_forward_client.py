@@ -1,7 +1,9 @@
 import asyncio
 import json
+import pickle
 import select
 import socket
+import time
 import traceback
 import uuid
 from functools import partial
@@ -28,23 +30,25 @@ class TcpForwardClient:
         self.send_lock = Lock()
 
     def start_listen_message(self):
-        asyncio.set_event_loop(self.loop)
-
         while self.is_running:
             s_list = list(self.client_to_uid.keys())
             if not s_list:
                 continue
-            rs, ws, es = select.select(s_list, s_list, s_list, 5)
+            rs, ws, es = select.select(s_list, s_list, s_list, 1)
             for each in rs:
                 # 发送到websocket
                 each: socket.socket
-                recv = each.recv(1024)
+                # LoggerFactory.get_logger().info(each.getpeername())
+                try:
+                    recv = each.recv(MessageTypeConstant.CHUNK_SIZE)
+                except ConnectionResetError:
+                    recv = b''
                 uid = self.client_to_uid[each]
                 send_message: MessageEntity = {
                     'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
                     'data': {
                         'name': self.name,
-                        'data': recv.hex(),
+                        'data': recv,
                         'uid': uid
                     }
                 }
@@ -54,13 +58,13 @@ class TcpForwardClient:
                     each.close()
                 try:
                     self.tornado_loop.add_callback(
-                        partial(self.websocket_handler.write_message, json.dumps(send_message)))
+                        partial(self.websocket_handler.write_message, pickle.dumps(send_message)), True)
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
 
     def start_accept(self):
         LoggerFactory.get_logger().info(f'start accept {self.listen_port}')
-        asyncio.set_event_loop(self.loop)
+        # asyncio.set_event_loop(self.loop)
         Thread(target=self.start_listen_message).start()
         while self.is_running:
             rs, ws, es = select.select([self.socket], [self.socket], [self.socket])
@@ -77,13 +81,17 @@ class TcpForwardClient:
                 self.uid_to_client[uid] = client
                 self.client_to_uid[client] = uid
 
-    def send_to_socket(self, uid: str, message: bytes):
+    async def send_to_socket(self, uid: str, message: bytes):
+        send_start_time = time.time()
         if uid not in self.uid_to_client:
+            LoggerFactory.get_logger().warn(f'{uid } not in ')
             return
         try:
-            self.uid_to_client[uid].send(message)
+            await asyncio.get_event_loop().sock_sendall(self.uid_to_client[uid], message)
         except OSError:
+            LoggerFactory.get_logger().warn(f'{uid } os error')
             pass
+        LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
     def bind_port(self):
         self.socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

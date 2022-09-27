@@ -62,6 +62,6 @@ if __name__ == "__main__":
     app = tornado.web.Application()
     route = Route(app)
     route.register(MyWebSocketaHandler)
-    app.listen(ContextUtils.get_port())
+    app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}..')
     tornado.ioloop.IOLoop.current().start()

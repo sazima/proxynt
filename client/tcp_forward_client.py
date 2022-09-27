@@ -1,7 +1,9 @@
 import ast
 import json
+import pickle
 import select
 import socket
+import time
 from threading import Thread, Lock
 from typing import List, Dict, Tuple, Set
 
@@ -24,7 +26,7 @@ class TcpForwardClient:
 
     def start_forward(self):
         while self.is_running:
-            with self.lock:
+            with self.lock:  # with
                 s_list = list(self.uid_to_socket.values())
                 if not s_list:
                     continue
@@ -32,21 +34,24 @@ class TcpForwardClient:
                     rs, write_s, es = select.select(s_list, s_list, s_list, 5)
                 except ValueError:
                     LoggerFactory.get_logger().error('value error continue')
+                    continue
             for each in rs:
                 uid = self.socket_to_uid[each]
                 try:
-                    recv = each.recv(1024)
+                    recv = each.recv(MessageTypeConstant.CHUNK_SIZE)
                 except OSError:
                     continue
                 send_message: MessageEntity = {
                     'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
                     'data': {
                         'name': self.uid_to_name[uid],
-                        'data': recv.hex(),
+                        'data': recv,
                         'uid': uid
                     }
                 }
-                self.ws.send(json.dumps(send_message))
+                start_time = time.time()
+                self.ws.send(pickle.dumps(send_message),  websocket.ABNF.OPCODE_BINARY)
+                LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
                 if not recv:
                     self.uid_to_socket.pop(uid)
                     self.socket_to_uid.pop(each)

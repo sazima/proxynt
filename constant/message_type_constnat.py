@@ -4,3 +4,5 @@ class MessageTypeConstant:
     ERROR = 'error'
 
     WEBSOCKET_OVER_TCP = 'websocket_over_tcp'
+
+    CHUNK_SIZE = 65536 * 2

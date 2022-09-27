@@ -1,5 +1,6 @@
 import json
 import logging
+import pickle
 import signal
 import sys
 import time
@@ -66,15 +67,18 @@ def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
 
 
 def on_message(ws, message: str):
-    message_data: MessageEntity = json.loads(message)
+    message_data: MessageEntity = pickle.loads(message)
+    start_time = time.time()
+    time_ = message_data['type_']
     if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
-        LoggerFactory.get_logger().debug(f'get websocket message {message_data}')
+        # LoggerFactory.get_logger().debug(f'get websocket message {message_data}')
         data: TcpOverWebsocketMessage = message_data['data']
         uid = data['uid']
         name = data['name']
-        b = bytes.fromhex(data['data'])
+        b = data['data']
         forward_client.create_socket(name, uid)
         forward_client.send_by_uid(uid, b)
+    # LoggerFactory.get_logger().debug(f'on message {time_} cost time {time.time() - start_time}')
 
 
 def on_error(ws, error):
@@ -82,7 +86,7 @@ def on_error(ws, error):
 
 
 def on_close(ws, a, b):
-    LoggerFactory.get_logger().info(f'close {ws}, {a}, {b} ')
+    LoggerFactory.get_logger().info(f'close, {a}, {b} ')
     forward_client.close()
 
 
@@ -94,7 +98,7 @@ def on_open(ws):
         'data': push_configs
     }
     forward_client.is_running = True
-    ws.send(json.dumps(message))
+    ws.send(pickle.dumps(message), websocket.ABNF.OPCODE_BINARY)
     task = Thread(target=forward_client.start_forward)
     task.start()
 
