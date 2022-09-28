@@ -26,15 +26,14 @@ class TcpForwardClient:
 
     def start_forward(self):
         while self.is_running:
-            with self.lock:  # with
-                s_list = list(self.uid_to_socket.values())
-                if not s_list:
-                    continue
-                try:
-                    rs, write_s, es = select.select(s_list, s_list, s_list, 5)
-                except ValueError:
-                    LoggerFactory.get_logger().error('value error continue')
-                    continue
+            s_list = (self.socket_to_uid.keys())
+            if not s_list:
+                continue
+            try:
+                rs, write_s, es = select.select(s_list, [], [], 1)
+            except (ValueError, OSError) as e:
+                LoggerFactory.get_logger().error(f'{e} error continue')
+                continue
             for each in rs:
                 uid = self.socket_to_uid[each]
                 try:
@@ -57,9 +56,6 @@ class TcpForwardClient:
                         self.close_connection(each)
                     except Exception:
                         LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
-                    # self.uid_to_socket.pop(uid)
-                    # self.socket_to_uid.pop(each)
-                    # each.close()
 
     def create_socket(self, name: str, uid: str):
         with self.lock:
@@ -71,6 +67,7 @@ class TcpForwardClient:
                 self.uid_to_name[uid] = name
 
     def close_connection(self, socket_client: socket.socket):
+        LoggerFactory.get_logger().info(f'close {socket_client}')
         uid = self.socket_to_uid.pop(socket_client)
         self.uid_to_socket.pop(uid)
         socket_client.close()
@@ -86,7 +83,7 @@ class TcpForwardClient:
 
     def send_by_uid(self, uid, msg: bytes):
         s = self.uid_to_socket[uid]
-        if not msg:
-            LoggerFactory.get_logger().info('get empty message, close')
-            self.close_connection(s)
-        s.send(msg)
+        # if not msg:
+        #     LoggerFactory.get_logger().info('get empty message, close')
+        #     self.close_connection(s)
+        s.sendall(msg)
