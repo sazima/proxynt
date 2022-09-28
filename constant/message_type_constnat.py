@@ -1,6 +1,6 @@
 class MessageTypeConstant:
     PUSH_CONFIG = '1'
 
-    ERROR = 'error'
+    ERROR = '3'
 
     WEBSOCKET_OVER_TCP = '2'

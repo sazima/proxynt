@@ -1,2 +1,2 @@
 class SystemConstant:
-    CHUNK_SIZE = 65536 * 2
+    CHUNK_SIZE = 65536 * 8
