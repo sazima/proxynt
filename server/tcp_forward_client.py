@@ -31,11 +31,11 @@ class TcpForwardClient:
 
     def start_listen_message(self):
         while self.is_running:
-            s_list = list(self.client_to_uid.keys())
+            s_list = (self.client_to_uid.keys())
             if not s_list:
                 continue
             try:
-                rs, ws, es = select.select(s_list, s_list, s_list, 1)
+                rs, ws, es = select.select(s_list, [], [], 1)
             except ValueError:
                 continue
             for each in rs:
@@ -44,6 +44,7 @@ class TcpForwardClient:
                 # LoggerFactory.get_logger().info(each.getpeername())
                 try:
                     recv = each.recv(SystemConstant.CHUNK_SIZE)
+                    # recv = recvall(each, SystemConstant.CHUNK_SIZE)
                 except ConnectionResetError:
                     recv = b''
                 uid = self.client_to_uid[each]
@@ -89,20 +90,18 @@ class TcpForwardClient:
     async def send_to_socket(self, uid: str, message: bytes):
         send_start_time = time.time()
         if uid not in self.uid_to_client:
-            LoggerFactory.get_logger().debug(f'{message}, {uid } not in ')
+            LoggerFactory.get_logger().debug(f'{message}, {uid} not in ')
             return
         try:
             socket_client = self.uid_to_client[uid]
-            if not message:
-                LoggerFactory.get_logger().info('empty message, close')
-                self.close_connection(socket_client)
             await asyncio.get_event_loop().sock_sendall(socket_client, message)
         except OSError:
-            LoggerFactory.get_logger().warn(f'{uid } os error')
+            LoggerFactory.get_logger().warn(f'{uid} os error')
             pass
         LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
     def close_connection(self, socket_client: socket.socket):
+        LoggerFactory.get_logger().info(f'close {socket_client}')
         with self.close_lock:
             if socket_client not in self.client_to_uid:
                 return
@@ -115,7 +114,6 @@ class TcpForwardClient:
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.socket.bind(('', self.listen_port))
         self.socket.listen(5)
-        self.socket.setblocking(True)
 
     def close(self):
         self.is_running = False
