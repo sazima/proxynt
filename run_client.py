@@ -124,7 +124,7 @@ if __name__ == "__main__":
     LoggerFactory.get_logger().info(f'start open {url}')
     ws = websocket.WebSocketApp(url,
                                 on_message=on_message,
-                                on_error=on_error,
+                                # on_error=on_error,
                                 on_close=on_close,
                                 on_open=on_open)
     forward_client = TcpForwardClient(name_to_addr, ws)
