@@ -114,6 +114,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     client.close()
                 except KeyError:
                     pass
+            self.handler_to_names.pop(self)
 
     def check_origin(self, origin: str) -> bool:
         return True
