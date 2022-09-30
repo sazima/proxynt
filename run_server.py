@@ -10,6 +10,7 @@ from tornado_request_mapping import Route
 from common.logger_factory import LoggerFactory
 from context.context_utils import ContextUtils
 from entity.server_config_entity import ServerConfigEntity
+from server.heart_beat_task import HeartBeatTask
 from server.websocket_handler import MyWebSocketaHandler
 
 DEFAULT_CONFIG = './config_s.json'
@@ -64,10 +65,12 @@ def load_config() -> ServerConfigEntity:
 
 
 if __name__ == "__main__":
+    heart_beat_task = HeartBeatTask()
     server_config = load_config()
     app = tornado.web.Application([
         (ContextUtils.get_websocket_path(), MyWebSocketaHandler),
     ])
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}..')
+    tornado.ioloop.PeriodicCallback(heart_beat_task.run, 5 * 1000).start()
     tornado.ioloop.IOLoop.current().start()

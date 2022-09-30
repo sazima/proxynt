@@ -34,6 +34,8 @@ class NatSerialization:
                      f'{str(len(remote_port.encode())).zfill(3)}{remote_port}' \
                      f'{str(len(local_port.encode())).zfill(3)}{local_port}' \
                      f'{str(len(local_ip.encode())).zfill(3)}{local_ip}'.encode()
+        elif type_ == MessageTypeConstant.PING:
+            return MessageTypeConstant.PING.encode()
         return b
 
     @classmethod
@@ -87,9 +89,16 @@ class NatSerialization:
                     'local_ip': local_ip
                 }
                 config_list.append(data)
+                # return MessageTypeConstant.PING.encode()
             return_data: MessageEntity = {
                 'type_': type_.decode(),
                 'data': config_list
+            }
+            return return_data
+        elif type_ == MessageTypeConstant.PING:
+            return_data: MessageEntity = {
+                'type_': type_.decode(),
+                'data': None
             }
             return return_data
 
