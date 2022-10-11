@@ -4,6 +4,14 @@
 ![原理](./image.png)
 
 
+## 使用前
+
+安装依赖
+
+```
+pip install -r requirements.txt
+```
+
 ## 使用
 
 客户端
