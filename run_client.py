@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -105,7 +106,7 @@ def on_open(ws):
 
 def signal_handler(sig, frame):
     print('You pressed Ctrl+C!')
-    sys.exit(0)
+    os._exit(0)
 
 
 if __name__ == "__main__":

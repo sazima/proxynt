@@ -5,7 +5,6 @@ from optparse import OptionParser
 
 import tornado.ioloop
 import tornado.web
-from tornado_request_mapping import Route
 
 from common.logger_factory import LoggerFactory
 from context.context_utils import ContextUtils
