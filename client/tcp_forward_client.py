@@ -28,7 +28,7 @@ class TcpForwardClient:
         while self.is_running:
             s_list = (self.socket_to_uid.keys())
             if not s_list:
-                time.sleep(3)
+                time.sleep(1)
                 continue
             try:
                 rs, write_s, es = select.select(s_list, [], [], 1)

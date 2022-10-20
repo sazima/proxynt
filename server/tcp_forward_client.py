@@ -33,7 +33,7 @@ class TcpForwardClient:
         while self.is_running:
             s_list = (self.client_to_uid.keys())
             if not s_list:
-                time.sleep(3)
+                time.sleep(1)
                 continue
             try:
                 rs, ws, es = select.select(s_list, [], [], 1)
