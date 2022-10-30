@@ -117,7 +117,10 @@ class TcpForwardClient:
 
     def close(self):
         self.is_running = False
-        self.socket_event_loop.stop()
+        try:
+            self.socket_event_loop.stop()
+        except KeyError:
+            pass
         if self.socket:
             try:
                 self.socket.shutdown(socket.SHUT_RDWR)
