@@ -13,6 +13,7 @@ from common.nat_serialization import NatSerialization
 from common.pool import EPool, SelectPool
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
+from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
 has_epool = hasattr(select, 'epoll')
@@ -59,7 +60,7 @@ class TcpForwardClient:
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
         try:
             self.tornado_loop.add_callback(
-                partial(self.websocket_handler.write_message, NatSerialization.dumps(send_message)), True)
+                partial(self.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 

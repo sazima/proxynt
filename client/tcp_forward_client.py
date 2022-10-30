@@ -12,6 +12,7 @@ from common.logger_factory import LoggerFactory
 from common.pool import EPool, SelectPool
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
+from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
 has_epool = hasattr(select, 'epoll')
@@ -49,7 +50,7 @@ class TcpForwardClient:
             }
         }
         start_time = time.time()
-        self.ws.send(NatSerialization.dumps(send_message), websocket.ABNF.OPCODE_BINARY)
+        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
         LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
         if not recv:
             try:

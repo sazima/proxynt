@@ -2,6 +2,7 @@ import asyncio
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
 from constant.message_type_constnat import MessageTypeConstant
+from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 from server.websocket_handler import MyWebSocketaHandler
 
@@ -16,6 +17,6 @@ class HeartBeatTask:
         }
 
         for h in handler_to_names.keys():
-            asyncio.ensure_future(h.write_message(NatSerialization.dumps(ping_message)))
+            asyncio.ensure_future(h.write_message(NatSerialization.dumps(ping_message, ContextUtils.get_password())))
 
 

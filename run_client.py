@@ -17,7 +17,7 @@ from constant.message_type_constnat import MessageTypeConstant
 from context.context_utils import ContextUtils
 from entity.client_config_entity import ClientConfigEntity
 from entity.message.message_entity import MessageEntity
-from entity.message.push_config_entity import PushConfigEntity
+from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
 
@@ -57,6 +57,7 @@ def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
     config_path = options.config
     with open(config_path, 'r') as rf:
         config_data: ClientConfigEntity = json.loads(rf.read())
+    ContextUtils.set_password(config_data['server']['password'])
     name_set: Set[str] = set()
     for client in config_data['client']:
         if client['name'] in name_set:
@@ -68,7 +69,7 @@ def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
 
 
 def on_message(ws, message: bytes):
-    message_data: MessageEntity = NatSerialization.loads(message)
+    message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
     start_time = time.time()
     time_ = message_data['type_']
     if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
@@ -93,13 +94,17 @@ def on_close(ws, a, b):
 
 def on_open(ws):
     LoggerFactory.get_logger().info('open success')
-    push_configs: List[PushConfigEntity] = config_data['client']
+    push_client_data: List[ClientData] = config_data['client']
+    push_configs: PushConfigEntity = {
+        'key': ContextUtils.get_password(),
+        'config_list': push_client_data
+    }
     message: MessageEntity = {
         'type_': MessageTypeConstant.PUSH_CONFIG,
         'data': push_configs
     }
     forward_client.is_running = True
-    ws.send(NatSerialization.dumps(message), websocket.ABNF.OPCODE_BINARY)
+    ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
     task = Thread(target=forward_client.start_forward)
     task.start()
 
@@ -115,6 +120,8 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)
     server_config = config_data['server']
+    if not server_config['password']:
+        raise Exception('密码不能为空, password is required')
     log_path = config_data.get('log_file')
     ContextUtils.set_log_file(log_path)
 
@@ -123,8 +130,7 @@ if __name__ == "__main__":
         url += 'wss://'
     else:
         url += 'ws://'
-    url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}?password={server_config['password']}"
-
+    url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}"
     LoggerFactory.get_logger().info(f'start open {url}')
     ws = websocket.WebSocketApp(url,
                                 on_message=on_message,

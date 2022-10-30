@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 import traceback
 from asyncio import Lock
@@ -14,7 +15,7 @@ from common.logger_factory import LoggerFactory
 from constant.message_type_constnat import MessageTypeConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
-from entity.message.push_config_entity import PushConfigEntity
+from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
 from exceptions.invalid_password import InvalidPassword
@@ -33,11 +34,6 @@ class MyWebSocketaHandler(WebSocketHandler):
         return password == request_password
 
     def open(self, *args: str, **kwargs: str):
-        password = self.get_argument('password', '')
-        if not self._check_password(password):
-            LoggerFactory.get_logger().error('invalid password')
-            self.close(reason='invalid password')
-            raise InvalidPassword()
         LoggerFactory.get_logger().info('new open websocket')
 
     async def write_message(self, message, binary=False):
@@ -54,12 +50,11 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self.on_message_async(m_bytes))
 
     async def on_message_async(self, message):
-        password = self.get_argument('password', '')
-        if not self._check_password(password):
-            LoggerFactory.get_logger().error('invalid password')
+        try:
+            message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
+        except json.decoder.JSONDecodeError:
             self.close(reason='invalid password')
             raise InvalidPassword()
-        message_dict: MessageEntity = NatSerialization.loads(message)
         start_time = time.time()
         if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
             data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
@@ -70,7 +65,12 @@ class MyWebSocketaHandler(WebSocketHandler):
         elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
             async with self.lock:
                 LoggerFactory.get_logger().info(f'get push config: {message_dict}')
-                data: List[PushConfigEntity] = message_dict['data']  # 配置
+                push_config: PushConfigEntity = message_dict['data']
+                data: List[ClientData] = push_config['config_list']  # 配置
+                key = push_config['key']
+                if key != ContextUtils.get_password():
+                    self.close(reason='invalid password')
+                    raise InvalidPassword()
                 this_name_to_tcp_forward_client = {}
                 name_set = set()
                 for d in data:
