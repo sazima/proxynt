@@ -56,15 +56,13 @@ class EPool(SocketLoop):
             # 事件是一个`(fileno, 事件code)`的元组
             for fileno, event in events:
                 client = self.fileno_to_client[fileno]
-                # if event & select.EPOLLIN:
-                # for f in self.call_back_function:
                 self.call_back_function[0](client)
-                # self.handler_message(client)
 
     def register(self, s: socket.socket):
         self.fileno_to_client[s.fileno()] = s
         self.poll.register(s.fileno(), select.EPOLLIN)
 
     def unregister(self, s: socket.socket):
-        self.fileno_to_client.pop(s.fileno())
-        self.poll.unregister(s.fileno())
+        if s.fileno() in self.fileno_to_client:
+            self.fileno_to_client.pop(s.fileno())
+            self.poll.unregister(s.fileno())

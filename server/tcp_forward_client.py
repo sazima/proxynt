@@ -102,10 +102,7 @@ class TcpForwardClient:
         # todo
         LoggerFactory.get_logger().info(f'close {socket_client}')
         with self.close_lock:
-            try:
-                self.socket_event_loop.unregister(socket_client)
-            except KeyError:
-                pass
+            self.socket_event_loop.unregister(socket_client)
             if socket_client not in self.client_to_uid:
                 return
             uid = self.client_to_uid.pop(socket_client)
