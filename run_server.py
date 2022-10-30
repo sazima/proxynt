@@ -45,7 +45,7 @@ def load_config() -> ServerConfigEntity:
         print('invalid log level.')
         sys.exit()
     ContextUtils.set_log_level(name_to_level[log_level])
-    LoggerFactory.get_logger().info(f'use config path : {config_path}')
+    print(f'use config path : {config_path}')
     config_path = config_path or DEFAULT_CONFIG
     with open(config_path, 'r') as rf:
         content_str = rf.read()
@@ -61,6 +61,7 @@ def load_config() -> ServerConfigEntity:
     ContextUtils.set_password(password)
     ContextUtils.set_websocket_path(path)
     ContextUtils.set_port(int(port))
+    ContextUtils.set_log_file(content_json.get('log_file'))
 
 
 if __name__ == "__main__":

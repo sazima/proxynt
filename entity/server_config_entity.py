@@ -5,3 +5,4 @@ class ServerConfigEntity(TypedDict):
     port: int
     password: str
     path: str
+    log_file: str

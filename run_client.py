@@ -67,7 +67,7 @@ def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
     return config_data, name_to_addr
 
 
-def on_message(ws, message: str):
+def on_message(ws, message: bytes):
     message_data: MessageEntity = NatSerialization.loads(message)
     start_time = time.time()
     time_ = message_data['type_']
@@ -115,6 +115,9 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)
     server_config = config_data['server']
+    log_path = config_data.get('log_file')
+    ContextUtils.set_log_file(log_path)
+
     url = ''
     if server_config['https']:
         url += 'wss://'

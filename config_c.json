@@ -19,5 +19,6 @@
       "local_port": 27017,
       "local_ip": "127.0.0.1"
     }
-  ]
+  ],
+  "log_file": "/var/log/nt/nt.log"
 }

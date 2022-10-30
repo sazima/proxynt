@@ -6,6 +6,7 @@ class ContextUtils:
     _log_level = '_log_level'
     _port = '_port'
     _password_key = '_password_key'
+    _log_path = '_log_path'
 
     @classmethod
     def get_password(cls) -> str:
@@ -38,3 +39,11 @@ class ContextUtils:
     @classmethod
     def get_websocket_path(cls):
         return c[cls._websocket_path]
+
+    @classmethod
+    def set_log_file(cls, path):
+        c[cls._log_path] = path
+
+    @classmethod
+    def get_log_file(cls) -> str:
+        return c[cls._log_path]

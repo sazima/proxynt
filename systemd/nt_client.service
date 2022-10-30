@@ -1,0 +1,13 @@
+[Unit]
+Description=nat_traversal client
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/local/bin/python3 /usr/local/nat_traversal/run_client.py -c /usr/local/nat_traversal/config_c.json
+
+[Install]
+WantedBy=multi-user.target

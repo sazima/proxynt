@@ -22,3 +22,4 @@ class _ClientEntity(TypedDict):
 class ClientConfigEntity(TypedDict):
     server: _ServerEntity
     client: List[_ClientEntity]
+    log_file: str
