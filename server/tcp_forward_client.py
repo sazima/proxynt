@@ -8,11 +8,15 @@ from functools import partial
 from threading import Thread, Lock
 from typing import Dict
 
-from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
+from common.nat_serialization import NatSerialization
+from common.pool import EPool, SelectPool
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
 from entity.message.message_entity import MessageEntity
+
+has_epool = hasattr(select, 'epoll')
+# has_epool = False
 
 
 class TcpForwardClient:
@@ -26,53 +30,43 @@ class TcpForwardClient:
         self.socket: socket.socket = None
         self.uid_to_client: Dict[str, socket.socket] = dict()
         self.client_to_uid: Dict[socket.socket, str] = dict()
-        self.loop = loop
+        # self.fileno_to_client: Dict[int, socket.socket] = dict()
         self.tornado_loop = tornado_loop
+        self.socket_event_loop = EPool() if has_epool else SelectPool()
+        self.socket_event_loop.add_callback_function(self.handler_message)
+        self.socket_event_loop.is_running = True
 
-    def start_listen_message(self):
-        while self.is_running:
-            s_list = (self.client_to_uid.keys())
-            if not s_list:
-                time.sleep(1)
-                continue
+    def handler_message(self, each: socket.socket):
+        # 发送到websocket
+        each: socket.socket
+        try:
+            recv = each.recv(SystemConstant.CHUNK_SIZE)
+        except ConnectionResetError:
+            recv = b''
+        uid = self.client_to_uid[each]
+        send_message: MessageEntity = {
+            'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
+            'data': {
+                'name': self.name,
+                'data': recv,
+                'uid': uid
+            }
+        }
+        if not recv:
+            LoggerFactory.get_logger().info('recv empty, close')
             try:
-                rs, ws, es = select.select(s_list, [], [], 1)
-            except ValueError:
-                continue
-            for each in rs:
-                # 发送到websocket
-                each: socket.socket
-                # LoggerFactory.get_logger().info(each.getpeername())
-                try:
-                    recv = each.recv(SystemConstant.CHUNK_SIZE)
-                    # recv = recvall(each, SystemConstant.CHUNK_SIZE)
-                except ConnectionResetError:
-                    recv = b''
-                uid = self.client_to_uid[each]
-                send_message: MessageEntity = {
-                    'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
-                    'data': {
-                        'name': self.name,
-                        'data': recv,
-                        'uid': uid
-                    }
-                }
-                if not recv:
-                    LoggerFactory.get_logger().info('recv empty, close')
-                    try:
-                        self.close_connection(each)
-                    except (OSError, ValueError, KeyError):
-                        LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
-                try:
-                    self.tornado_loop.add_callback(
-                        partial(self.websocket_handler.write_message, NatSerialization.dumps(send_message)), True)
-                except Exception:
-                    LoggerFactory.get_logger().error(traceback.format_exc())
+                self.close_connection(each)
+            except (OSError, ValueError, KeyError):
+                LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
+        try:
+            self.tornado_loop.add_callback(
+                partial(self.websocket_handler.write_message, NatSerialization.dumps(send_message)), True)
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
 
     def start_accept(self):
         LoggerFactory.get_logger().info(f'start accept {self.listen_port}')
-        # asyncio.set_event_loop(self.loop)
-        Thread(target=self.start_listen_message).start()
+        Thread(target=self.socket_event_loop.run).start()
         while self.is_running:
             rs, ws, es = select.select([self.socket], [self.socket], [self.socket])
             for each in rs:
@@ -87,23 +81,28 @@ class TcpForwardClient:
                 uid = uuid.uuid4().hex
                 self.uid_to_client[uid] = client
                 self.client_to_uid[client] = uid
+                self.socket_event_loop.register(client)
 
     async def send_to_socket(self, uid: str, message: bytes):
         send_start_time = time.time()
         if uid not in self.uid_to_client:
             LoggerFactory.get_logger().debug(f'{message}, {uid} not in ')
             return
+        socket_client = self.uid_to_client[uid]
         try:
-            socket_client = self.uid_to_client[uid]
             await asyncio.get_event_loop().sock_sendall(socket_client, message)
         except OSError:
             LoggerFactory.get_logger().warn(f'{uid} os error')
             pass
+        if not message:
+            self.close_connection(socket_client)
         LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
     def close_connection(self, socket_client: socket.socket):
+        # todo
         LoggerFactory.get_logger().info(f'close {socket_client}')
         with self.close_lock:
+            self.socket_event_loop.unregister(socket_client)
             if socket_client not in self.client_to_uid:
                 return
             uid = self.client_to_uid.pop(socket_client)
@@ -118,6 +117,7 @@ class TcpForwardClient:
 
     def close(self):
         self.is_running = False
+        self.socket_event_loop.stop()
         if self.socket:
             try:
                 self.socket.shutdown(socket.SHUT_RDWR)
