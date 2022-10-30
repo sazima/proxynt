@@ -16,7 +16,7 @@ from constant.system_constant import SystemConstant
 from entity.message.message_entity import MessageEntity
 
 has_epool = hasattr(select, 'epoll')
-# has_epool = False
+has_epool = False
 
 
 class TcpForwardClient:
@@ -33,10 +33,9 @@ class TcpForwardClient:
         # self.fileno_to_client: Dict[int, socket.socket] = dict()
         self.tornado_loop = tornado_loop
         self.socket_event_loop = EPool() if has_epool else SelectPool()
-        self.socket_event_loop.add_callback_function(self.handler_message)
-        self.socket_event_loop.is_running = True
+        self.socket_event_loop.add_callback_function(self.handle_message)
 
-    def handler_message(self, each: socket.socket):
+    def handle_message(self, each: socket.socket):
         # 发送到websocket
         each: socket.socket
         try:
@@ -66,6 +65,7 @@ class TcpForwardClient:
 
     def start_accept(self):
         LoggerFactory.get_logger().info(f'start accept {self.listen_port}')
+        self.socket_event_loop.is_running = True
         Thread(target=self.socket_event_loop.run).start()
         while self.is_running:
             rs, ws, es = select.select([self.socket], [self.socket], [self.socket])

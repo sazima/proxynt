@@ -2,6 +2,12 @@ import select
 import socket
 from typing import Dict, List
 
+from constant.system_constant import SystemConstant
+
+"""
+这里只监听了 socket  的可读状态 
+"""
+
 
 class SocketLoop:
     def __init__(self):
@@ -31,7 +37,7 @@ class SelectPool(SocketLoop):
         while self.is_running:
             s_list = (self.fileno_to_client.values())
             try:
-                rs, ws, es = select.select(s_list, [], [], 1)
+                rs, ws, es = select.select(s_list, [], [], SystemConstant.DEFAULT_TIMEOUT)
             except ValueError:
                 continue
             for each in rs:
@@ -46,14 +52,14 @@ class EPool(SocketLoop):
 
     def run(self):
         while self.is_running:
-            events = self.poll.poll(1)
+            events = self.poll.poll(SystemConstant.DEFAULT_TIMEOUT)
             # 事件是一个`(fileno, 事件code)`的元组
             for fileno, event in events:
                 client = self.fileno_to_client[fileno]
-                if event & select.EPOLLIN:
-                    for f in self.call_back_function:
-                        f(client)
-                    # self.handler_message(client)
+                # if event & select.EPOLLIN:
+                # for f in self.call_back_function:
+                self.call_back_function[0](client)
+                # self.handler_message(client)
 
     def register(self, s: socket.socket):
         self.fileno_to_client[s.fileno()] = s
