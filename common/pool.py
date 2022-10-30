@@ -19,7 +19,8 @@ class SocketLoop:
         self.fileno_to_client[s.fileno()] = s
 
     def unregister(self, s: socket.socket):
-        self.fileno_to_client.pop(s.fileno())
+        if s.fileno() in self.fileno_to_client:
+            self.fileno_to_client.pop(s.fileno())
 
     def add_callback_function(self, f: callable):
         """回调函数, 参数是 socket"""
