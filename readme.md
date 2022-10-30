@@ -6,8 +6,8 @@
 
 ## 特性
 
-1. 通信使用 WebSocket, 可部署在 Nginx 后端服务路径上
-2. 跨平台. 该工具用到的 Python 第三方库有: tornado, websocket-client, typing_extensions
+1. 公网和内网机器之间通信使用 WebSocket
+2. 跨平台. 工具用到的 Python 第三方库有: tornado, websocket-client, typing_extensions
 3. 测试scp上传文件速度与 frp 相当
 
 ## 使用前
@@ -76,5 +76,3 @@ python run_server.py -c config_s.json
 ```
 ssh -oPort=12222 test@192.168.9.224
 ```
-
-
