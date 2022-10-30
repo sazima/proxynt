@@ -16,7 +16,7 @@ from constant.system_constant import SystemConstant
 from entity.message.message_entity import MessageEntity
 
 has_epool = hasattr(select, 'epoll')
-has_epool = False
+# has_epool = False
 
 
 class TcpForwardClient:
