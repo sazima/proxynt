@@ -1,4 +1,6 @@
 import asyncio
+import traceback
+
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
 from constant.message_type_constnat import MessageTypeConstant
@@ -17,6 +19,10 @@ class HeartBeatTask:
         }
 
         for h in handler_to_names.keys():
-            asyncio.ensure_future(h.write_message(NatSerialization.dumps(ping_message, ContextUtils.get_password())))
+            try:
+                asyncio.ensure_future(h.write_message(NatSerialization.dumps(ping_message, ContextUtils.get_password())))
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
+
 
 

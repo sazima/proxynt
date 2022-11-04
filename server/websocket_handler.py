@@ -40,11 +40,12 @@ class MyWebSocketaHandler(WebSocketHandler):
         start_time = time.time()
         try:
             await (super(MyWebSocketaHandler, self).write_message(message, binary))
+            LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}')
             return
         except Exception:
             LoggerFactory.get_logger().info(message)
             LoggerFactory.get_logger().error(traceback.format_exc())
-        LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}')
+            raise
 
     def on_message(self, m_bytes):
         asyncio.ensure_future(self.on_message_async(m_bytes))
@@ -105,16 +106,21 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self._on_close(code, reason))
 
     async def _on_close(self, code: int = None, reason: str = None) -> None:
-        async with self.lock:
-            LoggerFactory.get_logger().info('close')
-            names = self.handler_to_names[self]
-            for name in names:
-                try:
-                    client = self.name_to_tcp_forward_client.pop(name)
-                    client.close()
-                except KeyError:
-                    pass
-            self.handler_to_names.pop(self)
+        try:
+            async with self.lock:
+                LoggerFactory.get_logger().info('close')
+                names = self.handler_to_names[self]
+                for name in names:
+                    try:
+                        client = self.name_to_tcp_forward_client.pop(name)
+                        client.close()
+                    except KeyError:
+                        pass
+                self.handler_to_names.pop(self)
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+            raise
+
 
     def check_origin(self, origin: str) -> bool:
         return True
