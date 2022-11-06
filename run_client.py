@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import time
+import traceback
 from optparse import OptionParser
 from threading import Thread
 from typing import List, Dict, Tuple, Set
@@ -69,17 +70,20 @@ def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
 
 
 def on_message(ws, message: bytes):
-    message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
-    start_time = time.time()
-    time_ = message_data['type_']
-    if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
-        # LoggerFactory.get_logger().debug(f'get websocket message {message_data}')
-        data: TcpOverWebsocketMessage = message_data['data']
-        uid = data['uid']
-        name = data['name']
-        b = data['data']
-        forward_client.create_socket(name, uid)
-        forward_client.send_by_uid(uid, b)
+    try:
+        message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
+        start_time = time.time()
+        time_ = message_data['type_']
+        if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
+            # LoggerFactory.get_logger().debug(f'get websocket message {message_data}')
+            data: TcpOverWebsocketMessage = message_data['data']
+            uid = data['uid']
+            name = data['name']
+            b = data['data']
+            forward_client.create_socket(name, uid)
+            forward_client.send_by_uid(uid, b)
+    except Exception:
+        LoggerFactory.get_logger().error(traceback.format_exc())
     # LoggerFactory.get_logger().debug(f'on message {time_} cost time {time.time() - start_time}')
 
 
