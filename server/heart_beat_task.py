@@ -20,7 +20,7 @@ class HeartBeatTask:
 
         for h in handler_to_names.keys():
             try:
-                asyncio.ensure_future(h.write_message(NatSerialization.dumps(ping_message, ContextUtils.get_password())))
+                asyncio.ensure_future(h.write_message(NatSerialization.dumps(ping_message, ContextUtils.get_password()), binary=True))
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
 
