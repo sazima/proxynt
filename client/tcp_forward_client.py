@@ -61,12 +61,17 @@ class TcpForwardClient:
     def create_socket(self, name: str, uid: str):
         with self.lock:
             if uid not in self.uid_to_socket:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.connect(self.name_to_addr[name])
-                self.uid_to_socket[uid] = s
-                self.socket_to_uid[s] = uid
-                self.uid_to_name[uid] = name
-                self.socket_event_loop.register(s)
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.settimeout(5)
+                    s.connect(self.name_to_addr[name])
+                    self.uid_to_socket[uid] = s
+                    self.socket_to_uid[s] = uid
+                    self.uid_to_name[uid] = name
+                    self.socket_event_loop.register(s)
+                except Exception:
+                    LoggerFactory.get_logger().error(traceback.format_exc())
+                    self.close_remote_socket(uid)
 
     def close_connection(self, socket_client: socket.socket):
         LoggerFactory.get_logger().info(f'close {socket_client}')
@@ -85,6 +90,27 @@ class TcpForwardClient:
             self.uid_to_name.clear()
             self.is_running = False
 
+    def close_remote_socket(self, uid: str):
+        send_message: MessageEntity = {
+            'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
+            'data': {
+                'name': self.uid_to_name[uid],
+                'data': b'',
+                'uid': uid
+            }
+        }
+        start_time = time.time()
+        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+        LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
+
     def send_by_uid(self, uid, msg: bytes):
-        s = self.uid_to_socket[uid]
-        s.sendall(msg)
+        try:
+            s = self.uid_to_socket[uid]
+            s.sendall(msg)
+            if not msg:
+                self.close_connection(s)
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+            # 出错后, 发送空, 服务器会关闭
+            self.close_remote_socket(uid)
+
