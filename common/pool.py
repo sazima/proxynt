@@ -58,7 +58,7 @@ class EPool(SocketLoop):
             # 事件是一个`(fileno, 事件code)`的元组
             for fileno, event in events:
                 client = self.fileno_to_client.get(fileno)
-                if client is not None:
+                if client is None:
                     LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
                     continue
                 self.call_back_function[0](client)
