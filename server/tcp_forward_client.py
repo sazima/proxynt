@@ -96,7 +96,7 @@ class TcpForwardClient:
             LoggerFactory.get_logger().warn(f'{uid} os error')
             pass
         if not message:
-            asyncio.get_event_loop().run_in_executor(None, self.close_connection, (socket_client, ))
+            asyncio.get_event_loop().run_in_executor(None, self.close_connection, socket_client)
 
         LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
