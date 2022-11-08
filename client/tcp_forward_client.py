@@ -81,11 +81,12 @@ class TcpForwardClient:
 
     def close_connection(self, socket_client: socket.socket):
         LoggerFactory.get_logger().info(f'close {socket_client}')
-        uid = self.socket_to_uid.pop(socket_client)
-        self.uid_to_socket.pop(uid)
-        self.socket_event_loop.unregister(socket_client)
-        socket_client.close()
-        LoggerFactory.get_logger().info(f'close success {socket_client}')
+        if socket_client in self.socket_to_uid:
+            uid = self.socket_to_uid.pop(socket_client)
+            self.uid_to_socket.pop(uid)
+            self.socket_event_loop.unregister(socket_client)
+            socket_client.close()
+            LoggerFactory.get_logger().info(f'close success {socket_client}')
 
     def close(self):
         with self.lock:
