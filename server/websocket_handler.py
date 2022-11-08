@@ -56,51 +56,54 @@ class MyWebSocketaHandler(WebSocketHandler):
         except json.decoder.JSONDecodeError:
             self.close(reason='invalid password')
             raise InvalidPassword()
-        start_time = time.time()
-        if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
-            data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
-            name = data['name']
-            uid = data['uid']
-            # self.name_to_tcp_forward_client[name].uid_to_client[uid].send(data['data'])
-            await self.name_to_tcp_forward_client[name].send_to_socket(uid, data['data'])
-        elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
-            async with self.lock:
-                LoggerFactory.get_logger().info(f'get push config: {message_dict}')
-                push_config: PushConfigEntity = message_dict['data']
-                data: List[ClientData] = push_config['config_list']  # 配置
-                key = push_config['key']
-                if key != ContextUtils.get_password():
-                    self.close(reason='invalid password')
-                    raise InvalidPassword()
-                this_name_to_tcp_forward_client = {}
-                name_set = set()
-                for d in data:
-                    if d['name'] in self.name_to_tcp_forward_client:
-                        self.close(None, 'DuplicatedName')
-                        raise DuplicatedName()
-                    if d['name'] in name_set:
-                        self.close(None, 'DuplicatedName')
-                        raise DuplicatedName()
-                    client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop(),
-                                              IOLoop.current())
-                    this_name_to_tcp_forward_client[d['name']] = client
-                    name_set.add(d['name'])
-                task_list: List[Thread] = []
-                for name, client in this_name_to_tcp_forward_client.items():
-                    try:
-                        client.bind_port()
-                    except OSError:
-                        for _, client in this_name_to_tcp_forward_client.items():
-                            client.close()
-                        raise
-                    task_list.append(Thread(target=client.start_accept))
-                self.name_to_tcp_forward_client.update(this_name_to_tcp_forward_client)
-                for name, _ in this_name_to_tcp_forward_client.items():
-                    self.handler_to_names[self].add(name)
-                for t in task_list:
-                    t.start()
+        try:
+            start_time = time.time()
+            if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
+                data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
+                name = data['name']
+                uid = data['uid']
+                # self.name_to_tcp_forward_client[name].uid_to_client[uid].send(data['data'])
+                await self.name_to_tcp_forward_client[name].send_to_socket(uid, data['data'])
+            elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
+                async with self.lock:
+                    LoggerFactory.get_logger().info(f'get push config: {message_dict}')
+                    push_config: PushConfigEntity = message_dict['data']
+                    data: List[ClientData] = push_config['config_list']  # 配置
+                    key = push_config['key']
+                    if key != ContextUtils.get_password():
+                        self.close(reason='invalid password')
+                        raise InvalidPassword()
+                    this_name_to_tcp_forward_client = {}
+                    name_set = set()
+                    for d in data:
+                        if d['name'] in self.name_to_tcp_forward_client:
+                            self.close(None, 'DuplicatedName')
+                            raise DuplicatedName()
+                        if d['name'] in name_set:
+                            self.close(None, 'DuplicatedName')
+                            raise DuplicatedName()
+                        client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop(),
+                                                  IOLoop.current())
+                        this_name_to_tcp_forward_client[d['name']] = client
+                        name_set.add(d['name'])
+                    task_list: List[Thread] = []
+                    for name, client in this_name_to_tcp_forward_client.items():
+                        try:
+                            client.bind_port()
+                        except OSError:
+                            for _, client in this_name_to_tcp_forward_client.items():
+                                client.close()
+                            raise
+                        task_list.append(Thread(target=client.start_accept))
+                    self.name_to_tcp_forward_client.update(this_name_to_tcp_forward_client)
+                    for name, _ in this_name_to_tcp_forward_client.items():
+                        self.handler_to_names[self].add(name)
+                    for t in task_list:
+                        t.start()
 
-        LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
+            LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
 
     def on_close(self, code: int = None, reason: str = None) -> None:
         asyncio.ensure_future(self._on_close(code, reason))

@@ -62,16 +62,22 @@ class TcpForwardClient:
         with self.lock:
             if uid not in self.uid_to_socket:
                 try:
+                    LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.settimeout(5)
                     s.connect(self.name_to_addr[name])
                     self.uid_to_socket[uid] = s
                     self.socket_to_uid[s] = uid
                     self.uid_to_name[uid] = name
+                    LoggerFactory.get_logger().debug(f'register socket {name}, {uid}')
                     self.socket_event_loop.register(s)
+                    LoggerFactory.get_logger().debug(f'register socket success {name}, {uid}')
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
                     self.close_remote_socket(uid)
+            else:
+                LoggerFactory.get_logger().debug(f'socket  already create')
+
 
     def close_connection(self, socket_client: socket.socket):
         LoggerFactory.get_logger().info(f'close {socket_client}')
@@ -79,6 +85,7 @@ class TcpForwardClient:
         self.uid_to_socket.pop(uid)
         self.socket_event_loop.unregister(socket_client)
         socket_client.close()
+        LoggerFactory.get_logger().info(f'close success {socket_client}')
 
     def close(self):
         with self.lock:
@@ -105,8 +112,10 @@ class TcpForwardClient:
 
     def send_by_uid(self, uid, msg: bytes):
         try:
+            LoggerFactory.get_logger().debug(f'send to {uid}, {msg}')
             s = self.uid_to_socket[uid]
             s.sendall(msg)
+            LoggerFactory.get_logger().debug(f'send success to {uid}, {msg}')
             if not msg:
                 self.close_connection(s)
         except Exception:
