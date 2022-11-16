@@ -17,6 +17,7 @@ from client.tcp_forward_client import TcpForwardClient
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
 from constant.message_type_constnat import MessageTypeConstant
+from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.client_config_entity import ClientConfigEntity
 from entity.message.message_entity import MessageEntity
@@ -147,7 +148,7 @@ if __name__ == "__main__":
                                 on_open=on_open)
     forward_client = TcpForwardClient(name_to_addr, ws)
     heart_beat_task = HeatBeatTask(ws)
-    threading.Timer(5, heart_beat_task.run).start()
+    threading.Timer(SystemConstant.HEART_BEAT_INTERVAL, heart_beat_task.run).start()
     LoggerFactory.get_logger().info('start run_forever')
     while True:
         try:

@@ -7,6 +7,7 @@ import tornado.ioloop
 import tornado.web
 
 from common.logger_factory import LoggerFactory
+from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.server_config_entity import ServerConfigEntity
 from server.heart_beat_task import HeartBeatTask
@@ -72,5 +73,5 @@ if __name__ == "__main__":
     ])
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}..')
-    tornado.ioloop.PeriodicCallback(heart_beat_task.run, 5 * 1000).start()
+    tornado.ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
     tornado.ioloop.IOLoop.current().start()

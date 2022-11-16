@@ -1,3 +1,4 @@
+import threading
 import traceback
 
 import websocket
@@ -5,6 +6,7 @@ import websocket
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
 from constant.message_type_constnat import MessageTypeConstant
+from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
@@ -26,4 +28,7 @@ class HeatBeatTask:
                 LoggerFactory.get_logger().debug('send client heart beat success ')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
+        finally:
+            threading.Timer(SystemConstant.HEART_BEAT_INTERVAL, self.run).start()
+
 
