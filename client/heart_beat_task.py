@@ -15,6 +15,7 @@ class HeatBeatTask:
         self.is_running = False
 
     def run(self):
+        print('hello')
         try:
             if self.is_running:
                 ping_message: MessageEntity = {
