@@ -10,7 +10,9 @@ from threading import Thread
 from typing import List, Dict, Tuple, Set
 
 import websocket
+from tornado import ioloop
 
+from client.heart_beat_task import HeatBeatTask
 from common.nat_serialization import NatSerialization
 from client.tcp_forward_client import TcpForwardClient
 from common.logger_factory import LoggerFactory
@@ -93,6 +95,7 @@ def on_error(ws, error):
 
 def on_close(ws, a, b):
     LoggerFactory.get_logger().info(f'close, {a}, {b} ')
+    heart_beat_task.is_running = False
     forward_client.close()
 
 
@@ -108,6 +111,7 @@ def on_open(ws):
         'data': push_configs
     }
     forward_client.is_running = True
+    heart_beat_task.is_running = True
     ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
     task = Thread(target=forward_client.start_forward)
     task.start()
@@ -142,6 +146,8 @@ if __name__ == "__main__":
                                 on_close=on_close,
                                 on_open=on_open)
     forward_client = TcpForwardClient(name_to_addr, ws)
+    heart_beat_task = HeatBeatTask(ws)
+    ioloop.PeriodicCallback(heart_beat_task.run, 30).start()
     LoggerFactory.get_logger().info('start run_forever')
     while True:
         try:

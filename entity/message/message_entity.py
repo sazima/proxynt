@@ -8,4 +8,4 @@ from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 
 class MessageEntity(TypedDict):
     type_: str
-    data: Union[PushConfigEntity, TcpOverWebsocketMessage]
+    data: Union[PushConfigEntity, TcpOverWebsocketMessage, None]
