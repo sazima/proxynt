@@ -13,6 +13,7 @@ class LoggerFactory:
     fmt = " %(asctime)s %(filename)s %(lineno)s %(funcName)s %(message)s"
     logger = logging.getLogger("loger")
     default_log_file = os.path.join('log', 'log.log')
+    backupCount = 30
     # tz = 'Asia/Shanghai'
 
     @classmethod
@@ -46,7 +47,7 @@ class LoggerFactory:
             log_file = cls.default_log_file
         # log_file = ContextUtils.get_log_file() if ContextUtils.get_log_file() else  cls.default_log_file
         cls.check_log_directory(log_file)
-        handler = TimedRotatingFileHandler(log_file, when="d")
+        handler = TimedRotatingFileHandler(log_file, when="d", backupCount=cls.backupCount)
         formatter = logging.Formatter(cls.fmt)
         handler.setFormatter(formatter)
         logger.addHandler(handler)
