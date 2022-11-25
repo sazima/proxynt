@@ -102,7 +102,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     for t in task_list:
                         t.start()
                     self.handler_to_recv_time[self] = time.time()
-
+            elif message_dict['type_'] == MessageTypeConstant.PING:
+                self.handler_to_recv_time[self] = time.time()
             LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
