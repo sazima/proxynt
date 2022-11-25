@@ -19,16 +19,21 @@ class HeatBeatTask:
         self.ws: websocket.WebSocketApp = ws
         self.is_running = False
         self.recv_heart_beat_time: float = time.time()
+        self.lock = asyncio.Lock()
 
     def set_recv_heart_beat_time(self, d: float):
         self.recv_heart_beat_time = d
 
     async def run(self):
-        try:
-            await asyncio.wait_for(ioloop.IOLoop.current().run_in_executor(None, self.send_heart_beat), timeout=20)
-        except Exception:
-            LoggerFactory.get_logger().error(traceback.format_exc())
-        self.check_recv_heart_beat_time()
+        if self.lock.locked():
+            LoggerFactory.get_logger().error('locked return')
+            return
+        async with self.lock:
+            try:
+                await asyncio.wait_for(ioloop.IOLoop.current().run_in_executor(None, self.send_heart_beat), timeout=20)
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
+            self.check_recv_heart_beat_time()
 
     def send_heart_beat(self):
         if self.is_running:
@@ -39,11 +44,17 @@ class HeatBeatTask:
             }
             self.ws.send(NatSerialization.dumps(ping_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
             LoggerFactory.get_logger().debug('send client heart beat success ')
+        else:
+            LoggerFactory.get_logger().debug('not running , skip send heart beat ')
+
     def check_recv_heart_beat_time(self):
         """超时关闭"""
-        LoggerFactory.get_logger().info('time %s ', self.recv_heart_beat_time)
-        if (time.time() - self.recv_heart_beat_time) > SystemConstant.MAX_HEART_BEAT_SECONDS:
-            LoggerFactory.get_logger().info(f'receive heart timeout {time.time() - self.recv_heart_beat_time}, close client  ')
-            self.ws.close()
+        if self.is_running:
+            LoggerFactory.get_logger().debug('time %s ', self.recv_heart_beat_time)
+            if (time.time() - self.recv_heart_beat_time) > SystemConstant.MAX_HEART_BEAT_SECONDS:
+                LoggerFactory.get_logger().info(f'receive heart timeout {time.time() - self.recv_heart_beat_time}, close client  ')
+                self.ws.close()
+        else:
+            LoggerFactory.get_logger().debug('not running , skip check recv heart beat ')
 
 
