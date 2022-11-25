@@ -11,6 +11,7 @@ from threading import Thread
 from typing import List, Dict, Tuple, Set
 
 import websocket
+from tornado import ioloop
 
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
@@ -85,6 +86,9 @@ def on_message(ws, message: bytes):
             b = data['data']
             forward_client.create_socket(name, uid)
             forward_client.send_by_uid(uid, b)
+        if message_data['type_'] == MessageTypeConstant.PING:
+            heart_beat_task.set_recv_heart_beat_time(time.time())
+
     except Exception:
         LoggerFactory.get_logger().error(traceback.format_exc())
     # LoggerFactory.get_logger().debug(f'on message {time_} cost time {time.time() - start_time}')
@@ -113,6 +117,7 @@ def on_open(ws):
     }
     forward_client.is_running = True
     heart_beat_task.is_running = True
+    heart_beat_task.set_recv_heart_beat_time(time.time())
     ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
     task = Thread(target=forward_client.start_forward)
     task.start()
@@ -121,6 +126,16 @@ def on_open(ws):
 def signal_handler(sig, frame):
     print('You pressed Ctrl+C!')
     os._exit(0)
+
+
+def run_client(ws):
+    while True:
+        try:
+            ws.run_forever()  # Set dispatcher to automatic reconnection
+        except Exception as e:
+            raise
+        LoggerFactory.get_logger().info(f'try after 2 seconds')
+        time.sleep(2)
 
 
 if __name__ == "__main__":
@@ -148,12 +163,8 @@ if __name__ == "__main__":
                                 on_open=on_open)
     forward_client = TcpForwardClient(name_to_addr, ws)
     heart_beat_task = HeatBeatTask(ws)
-    threading.Timer(SystemConstant.HEART_BEAT_INTERVAL, heart_beat_task.run).start()
     LoggerFactory.get_logger().info('start run_forever')
-    while True:
-        try:
-            ws.run_forever()  # Set dispatcher to automatic reconnection
-        except Exception as e:
-            raise
-        LoggerFactory.get_logger().info(f'try after 2 seconds')
-        time.sleep(2)
+    Thread(target=run_client, args=(ws, )).start()  # 为了使用tornado的ioloop 方便设置超时
+    ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
+    ioloop.IOLoop.current().start()
+

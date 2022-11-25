@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import sys
@@ -66,12 +67,12 @@ def load_config() -> ServerConfigEntity:
 
 
 if __name__ == "__main__":
-    heart_beat_task = HeartBeatTask()
     server_config = load_config()
     app = tornado.web.Application([
         (ContextUtils.get_websocket_path(), MyWebSocketaHandler),
     ])
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}..')
+    heart_beat_task = HeartBeatTask(asyncio.get_event_loop())
     tornado.ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
     tornado.ioloop.IOLoop.current().start()

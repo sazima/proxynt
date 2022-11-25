@@ -25,6 +25,7 @@ from server.tcp_forward_client import TcpForwardClient
 class MyWebSocketaHandler(WebSocketHandler):
     name_to_tcp_forward_client: Dict[str, TcpForwardClient] = {}
     handler_to_names: Dict['MyWebSocketaHandler', Set[str]] = defaultdict(set)
+    handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
     lock = Lock()
 
     def _check_password(self, request_password: str) -> bool:
@@ -100,6 +101,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                         self.handler_to_names[self].add(name)
                     for t in task_list:
                         t.start()
+                    self.handler_to_recv_time[self] = time.time()
 
             LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
         except Exception:
@@ -120,6 +122,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     except KeyError:
                         pass
                 self.handler_to_names.pop(self)
+                if self in self.handler_to_recv_time:
+                    self.handler_to_recv_time.pop(self)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise
