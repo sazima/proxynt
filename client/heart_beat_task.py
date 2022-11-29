@@ -5,6 +5,7 @@ import traceback
 
 import websocket
 from tornado import ioloop
+from websocket import WebSocketConnectionClosedException
 
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
@@ -31,6 +32,11 @@ class HeatBeatTask:
         async with self.lock:
             try:
                 await asyncio.wait_for(ioloop.IOLoop.current().run_in_executor(None, self.send_heart_beat), timeout=20)
+            except WebSocketConnectionClosedException:
+                try:
+                    await asyncio.wait_for(ioloop.IOLoop.current().run_in_executor(None, self._close_and_on_close), timeout=20)
+                except Exception:
+                    LoggerFactory.get_logger().error(traceback.format_exc())
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
             self.check_recv_heart_beat_time()
@@ -53,8 +59,12 @@ class HeatBeatTask:
             LoggerFactory.get_logger().debug('time %s ', self.recv_heart_beat_time)
             if (time.time() - self.recv_heart_beat_time) > SystemConstant.MAX_HEART_BEAT_SECONDS:
                 LoggerFactory.get_logger().info(f'receive heart timeout {time.time() - self.recv_heart_beat_time}, close client  ')
-                self.ws.close()
+                self.ws.close()  # 有时候不会自己调用on_close 方法
         else:
             LoggerFactory.get_logger().debug('not running , skip check recv heart beat ')
+
+    def _close_and_on_close(self):
+        self.ws.close()
+        self.ws.on_close(self.ws, None, None)
 
 
