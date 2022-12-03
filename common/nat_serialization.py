@@ -22,7 +22,7 @@ class NatSerialization:
             uid = data_content['uid']  # 长度32
             name = data_content['name']
             bytes_ = data_content['data']
-            # I是uint32, 占4位, uid是固定32
+            # I是uint32, 占4位, unsigned __int32	0 到 4,294,967,295;  uid是固定32
             b = type_.encode() + struct.pack(f'II32s{len(name.encode())}s{len(bytes_)}s', len(name.encode()), len(bytes_), uid.encode(), name.encode(),  bytes_)
         elif type_ == MessageTypeConstant.PUSH_CONFIG:
             b = type_.encode() + json.dumps(data).encode()
@@ -35,7 +35,7 @@ class NatSerialization:
         byte_data = EncryptUtils.decode(byte_data, key)
         type_ = byte_data[0:1]
         if type_ == MessageTypeConstant.WEBSOCKET_OVER_TCP.encode():
-            # I是uint32, 占4位, uid是固定32
+            # I是uint32, 占4位, unsigned __int32	0 到 4,294,967,295;  uid是固定32
             len_name, len_bytes = struct.unpack('II', byte_data[1:9])
             uid, name, socket_dta = struct.unpack(f'32s{len_name}s{len_bytes}s', byte_data[9:])
             data: TcpOverWebsocketMessage = {
