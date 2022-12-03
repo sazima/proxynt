@@ -36,6 +36,7 @@ name_to_level = {
     'warn': logging.WARN,
     'error': logging.ERROR
 }
+OPEN_CLOSE_LOCK = threading.Lock()
 
 
 def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
@@ -99,28 +100,31 @@ def on_error(ws, error):
 
 
 def on_close(ws, a, b):
-    LoggerFactory.get_logger().info(f'close, {a}, {b} ')
-    heart_beat_task.is_running = False
-    forward_client.close()
+    with OPEN_CLOSE_LOCK:
+        LoggerFactory.get_logger().info(f'close, {a}, {b} ')
+        heart_beat_task.is_running = False
+        forward_client.close()
 
 
 def on_open(ws):
-    LoggerFactory.get_logger().info('open success')
-    push_client_data: List[ClientData] = config_data['client']
-    push_configs: PushConfigEntity = {
-        'key': ContextUtils.get_password(),
-        'config_list': push_client_data
-    }
-    message: MessageEntity = {
-        'type_': MessageTypeConstant.PUSH_CONFIG,
-        'data': push_configs
-    }
-    forward_client.is_running = True
-    heart_beat_task.is_running = True
-    heart_beat_task.set_recv_heart_beat_time(time.time())
-    ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
-    task = Thread(target=forward_client.start_forward)
-    task.start()
+    with OPEN_CLOSE_LOCK:
+        LoggerFactory.get_logger().info('open success')
+        push_client_data: List[ClientData] = config_data['client']
+        push_configs: PushConfigEntity = {
+            'key': ContextUtils.get_password(),
+            'config_list': push_client_data
+        }
+        message: MessageEntity = {
+            'type_': MessageTypeConstant.PUSH_CONFIG,
+            'data': push_configs
+        }
+        heart_beat_task.set_recv_heart_beat_time(time.time())
+
+        ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+        forward_client.is_running = True
+        heart_beat_task.is_running = True
+        task = Thread(target=forward_client.start_forward)
+        task.start()
 
 
 def signal_handler(sig, frame):
