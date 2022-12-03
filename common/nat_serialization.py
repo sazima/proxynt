@@ -1,4 +1,5 @@
 import json
+import struct
 
 from common.encrypt_utils import EncryptUtils
 from constant.message_type_constnat import MessageTypeConstant
@@ -21,8 +22,8 @@ class NatSerialization:
             uid = data_content['uid']  # 长度32
             name = data_content['name']
             bytes_ = data_content['data']
-            b += f'{uid}' \
-                 f'{str(len(name.encode())).zfill(3)}{name}'.encode() + bytes_
+            # I是uint32, 占4位, uid是固定32
+            b = type_.encode() + struct.pack(f'II32s{len(name.encode())}s{len(bytes_)}s', len(name.encode()), len(bytes_), uid.encode(), name.encode(),  bytes_)
         elif type_ == MessageTypeConstant.PUSH_CONFIG:
             b = type_.encode() + json.dumps(data).encode()
         elif type_ == MessageTypeConstant.PING:
@@ -34,14 +35,9 @@ class NatSerialization:
         byte_data = EncryptUtils.decode(byte_data, key)
         type_ = byte_data[0:1]
         if type_ == MessageTypeConstant.WEBSOCKET_OVER_TCP.encode():
-            start = 1
-            uid = byte_data[start: start + 32].decode()
-            start += 32
-            name_len = int(byte_data[start: start + 3].decode())
-            start += 3
-            name = byte_data[start: start + name_len].decode()
-            start += name_len
-            socket_dta: bytes = byte_data[start:]
+            # I是uint32, 占4位, uid是固定32
+            len_name, len_bytes = struct.unpack('II', byte_data[1:9])
+            uid, name, socket_dta = struct.unpack(f'32s{len_name}s{len_bytes}s', byte_data[9:])
             data: TcpOverWebsocketMessage = {
                 'uid': uid,
                 'name': name,
@@ -65,30 +61,13 @@ class NatSerialization:
 
 
 if __name__ == '__main__':
-    data = {
-        'type_': '1',
-        'data': [
-                {
-                    "name": "ssh",
-                    "remote_port": 1222,
-                    "local_port": 22,
-                    "local_ip": "127.0.0.1"
-                },
-                {
-                    "name": "mongo",
-                    "remote_port": 1223,
-                    "local_port": 27017,
-                    "local_ip": "127.0.0.1"
-                }
-            ]
 
-    }
     data = {'type_': '2',
             'data': {'name': 'ssh',
                      'data': b'SSH-2.0-OpenSSH_7.8\r\n',
                      'uid': 'e18fe62fa05f446db95236c9826bfdd6'}}
-    a = NatSerialization.dumps(data)
+    a = NatSerialization.dumps(data, '')
     # print(pickle.dumps(a))
     print(a)
-    b = NatSerialization.loads(a)
+    b = NatSerialization.loads(a, '')
     print(b)
