@@ -128,7 +128,7 @@ def signal_handler(sig, frame):
     os._exit(0)
 
 
-def run_client(ws):
+def run_client(ws: websocket.WebSocketApp):
     while True:
         try:
             ws.run_forever()  # Set dispatcher to automatic reconnection
