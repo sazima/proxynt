@@ -39,8 +39,8 @@ class NatSerialization:
             len_name, len_bytes = struct.unpack('II', byte_data[1:9])
             uid, name, socket_dta = struct.unpack(f'32s{len_name}s{len_bytes}s', byte_data[9:])
             data: TcpOverWebsocketMessage = {
-                'uid': uid,
-                'name': name,
+                'uid': uid.decode(),
+                'name': name.decode(),
                 'data': socket_dta
             }
             return_data: MessageEntity = {
