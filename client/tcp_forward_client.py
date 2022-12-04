@@ -92,7 +92,14 @@ class TcpForwardClient:
         with self.lock:
             self.socket_event_loop.stop()
             for uid, s in self.uid_to_socket.items():
-                s.close()
+                try:
+                    s.close()
+                except Exception:
+                    LoggerFactory.get_logger().error(traceback.format_exc())
+                try:
+                    self.socket_event_loop.unregister(s)
+                except Exception:
+                    LoggerFactory.get_logger().error(traceback.format_exc())
             self.uid_to_socket.clear()
             self.socket_to_uid.clear()
             self.uid_to_name.clear()

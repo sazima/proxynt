@@ -120,6 +120,22 @@ class TcpForwardClient:
     def close(self):
         self.is_running = False
         self.socket_event_loop.stop()
+        # close client
+        try:
+            for client, uid in self.client_to_uid.items():
+                try:
+                    client.close()
+                except Exception:
+                    LoggerFactory.get_logger().warn(f'close error, {client}, {traceback.format_exc()}')
+                try:
+                    self.socket_event_loop.unregister(client)
+                except Exception:
+                    LoggerFactory.get_logger().warn(f'unregister error, {client}, {traceback.format_exc()}')
+        except Exception:
+            LoggerFactory.get_logger().warning(f'close error: {traceback.format_exc()}')
+        self.client_to_uid.clear()
+        self.uid_to_client.clear()
+        # close server
         if self.socket:
             try:
                 self.socket.shutdown(socket.SHUT_RDWR)
