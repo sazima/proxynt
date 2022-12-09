@@ -40,7 +40,7 @@ class MyWebSocketaHandler(WebSocketHandler):
     async def write_message(self, message, binary=False):
         start_time = time.time()
         try:
-            await (super(MyWebSocketaHandler, self).write_message(message, binary))
+            await (super(MyWebSocketaHandler, self).write_message(bytes(message), binary))
             LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}')
             return
         except Exception:
