@@ -1,5 +1,6 @@
 import select
 import socket
+import traceback
 from typing import Dict, List
 
 from common.logger_factory import LoggerFactory
@@ -37,14 +38,18 @@ class SocketLoop:
 class SelectPool(SocketLoop):
     def run(self):
         while self.is_running:
-            s_list = (self.fileno_to_client.values())
             try:
-                rs, ws, es = select.select(s_list, [], [], SystemConstant.DEFAULT_TIMEOUT)
-            except ValueError:
-                continue
-            for each in rs:
-                for f in self.call_back_function:
-                    f(each)
+                s_list = (self.fileno_to_client.values())
+                try:
+                    rs, ws, es = select.select(s_list, [], [], SystemConstant.DEFAULT_TIMEOUT)
+                except ValueError:
+                    continue
+                for each in rs:
+                    for f in self.call_back_function:
+                        f(each)
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
+
 
 
 class EPool(SocketLoop):
@@ -54,14 +59,17 @@ class EPool(SocketLoop):
 
     def run(self):
         while self.is_running:
-            events = self.poll.poll(SystemConstant.DEFAULT_TIMEOUT)
-            # 事件是一个`(fileno, 事件code)`的元组
-            for fileno, event in events:
-                client = self.fileno_to_client.get(fileno)
-                if client is None:
-                    LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
-                    continue
-                self.call_back_function[0](client)
+            try:
+                events = self.poll.poll(SystemConstant.DEFAULT_TIMEOUT)
+                # 事件是一个`(fileno, 事件code)`的元组
+                for fileno, event in events:
+                    client = self.fileno_to_client.get(fileno)
+                    if client is None:
+                        LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
+                        continue
+                    self.call_back_function[0](client)
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
 
 
     def register(self, s: socket.socket):
