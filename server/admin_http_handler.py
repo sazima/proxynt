@@ -44,7 +44,7 @@ class AdminHtmlHandler(RequestHandler):
                     'msg': '密码错误'
                 })
         except Exception:
-            LoggerFactory.get_logger().error(traceback.format_tb())
+            LoggerFactory.get_logger().error(traceback.format_exc())
 
 
 

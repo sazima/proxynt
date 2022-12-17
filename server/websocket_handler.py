@@ -75,6 +75,10 @@ class MyWebSocketaHandler(WebSocketHandler):
                     push_config: PushConfigEntity = message_dict['data']
                     client_name = push_config['client_name']
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
+                    if client_name in self.client_name_to_handler:
+                        self.close(None, 'DuplicatedClientName')  # 与服务器上配置的名字重复
+                        raise DuplicatedName()
+                        pass
                     # todo 获取服务端配置
                     data: List[ClientData] = push_config['config_list']  # 配置
                     name_in_client = {x['name'] for x in data}

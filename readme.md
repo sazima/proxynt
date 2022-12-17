@@ -29,6 +29,12 @@ python run_client.py -c config_c.json
 python run_server.py -c config_s.json
 ```
 
+服务端管理页面: 
+管理页面路径为服务端配置的websocket路径+admin,
+```
+比如 
+http://192.168.32.229:18888/websocketpath/admin
+```
 
 ## 示例, 通过 SSH 访问内网机器
 
@@ -74,4 +80,11 @@ python run_server.py -c config_s.json
 #### 3. ssh 连接: 
 ```
 ssh -oPort=12222 test@192.168.9.224
+```
+
+
+#### 打开管理页面:
+
+```
+http://192.168.9.224:18888/websocketpath/admin
 ```
