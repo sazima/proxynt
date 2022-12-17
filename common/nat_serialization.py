@@ -12,9 +12,9 @@ class NatSerialization:
         定义协议:
         第0字节: 为报文类型 类型参考: MessageTypeConstant
         第1字节之后是数据:
-            如果类型是转发tcp报文: 前1-9字节为两个uint32数字(低位在前), 分别代表name长度和tcp报文的长度, 第9字节之后是uid, name和tcp报文
+            如果类型是转发tcp报文: 前1-9字节为两个unChar, 一个int32 (低位在前) 分别代表name长度, ip端口长度, tcp报文的长度; 第9字节之后是uid, name, ip端口, tcp报文
             如果类型是配置信息: 1-最后二进制转字符串是一个 Json 字符串
-            如果类型websocket心跳: 长度为1个字节
+            如果类型websocket心跳: 长度为1个字节, 无数据
 
         暂时没有加密报文, 因此使用的时候需要自己配置 Https
     """

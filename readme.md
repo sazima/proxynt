@@ -29,12 +29,14 @@ python run_client.py -c config_c.json
 python run_server.py -c config_s.json
 ```
 
-服务端管理页面: 
-管理页面路径为服务端配置的websocket路径+admin,
+服务端ui: 
 ```
+管理页面路径为websocket路径+admin,
 比如 
-http://192.168.32.229:18888/websocketpath/admin
+http://192.168.9.229:18888/websocketpath1/admin
 ```
+
+![原理](./ui.png)
 
 ## 示例, 通过 SSH 访问内网机器
 
