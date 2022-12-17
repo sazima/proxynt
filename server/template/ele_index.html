@@ -35,7 +35,11 @@
                                 width="180">
                         </el-table-column>
                         <el-table-column label="操作">
+
                             <template slot-scope="scope">
+
+
+
                                 <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
                                         size="mini"
                                         @click="handleDelete(props.row.client_name, scope.row.name)">删除 </el-button>
@@ -55,7 +59,7 @@
         </el-table-column>
         <el-table-column
                 prop="status"
-                label="标签"
+                label="状态"
                 width="100"
                 :filters="[{ text: 'online', value: 'online' }, { text: 'offline', value: 'offline' }]"
                 filter-placement="bottom-end">
@@ -82,14 +86,14 @@
                 <el-input v-model="form.name" autocomplete="off"></el-input>
             </el-form-item>
             <el-form-item label="远程端口" :label-width="formLabelWidth">
-                <el-input v-model="form.remote_port" autocomplete="off"></el-input>
+                <el-input v-model="form.remote_port"  type='number' autocomplete="off"></el-input>
             </el-form-item>
 
             <el-form-item label="本地ip" :label-width="formLabelWidth">
                 <el-input v-model="form.local_ip" autocomplete="off"></el-input>
             </el-form-item>
             <el-form-item label="本地端口" :label-width="formLabelWidth">
-                <el-input v-model="form.local_port" autocomplete="off"></el-input>
+                <el-input v-model="form.local_port"  type='number' autocomplete="off"></el-input>
             </el-form-item>
         </el-form>
         <div slot="footer" class="dialog-footer">
@@ -147,11 +151,10 @@
                     if (res.data.code !== 200) {
                         return alert(res.data.msg)
                     }
-                    this.tableData = res.data.data
-                    console.log(this.tableData)
                     this.dialogFormVisible = false
                 }).catch(err => {
                     console.log(err)
+                    this.$message.error('错了哦，这是一条错误消息')
                     alert('服务器出现错误')
                 })
             },
@@ -161,19 +164,25 @@
                     client_name: client_name,
                     name: name
                 }
-                axios.delete(url, {
-                    params: params
-                } ).then(res=> {
-                    if (res.data.code !== 200) {
-                        return alert(res.data.msg)
-                    }
-                    this.tableData = res.data.data
-                    console.log(this.tableData)
-                    this.dialogFormVisible = false
-                }).catch(err => {
-                    console.log(err)
-                    alert('服务器出现错误')
+                this.$confirm('此操作将永久删除该文件, 是否继续?', '提示', {
+                    confirmButtonText: '确定',
+                    cancelButtonText: '取消',
+                    type: 'warning'
+                }).then(() => {
+                    axios.delete(url, {
+                        params: params
+                    } ).then(res=> {
+                        if (res.data.code !== 200) {
+                            return alert(res.data.msg)
+                        }
+                        this.dialogFormVisible = false
+                    }).catch(err => {
+                        console.log(err)
+                        alert('服务器出现错误')
+                    })
+
                 })
+
 
             },
             getClientList() {
@@ -188,7 +197,8 @@
                     console.log(this.tableData)
                 }).catch(err => {
                     console.log(err)
-                    alert('服务器出现错误')
+                    this.$message.error(err)
+                    // alert('服务器出现错误')
                 })
             }
         }

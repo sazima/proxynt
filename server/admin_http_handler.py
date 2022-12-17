@@ -13,7 +13,7 @@ from server.websocket_handler import MyWebSocketaHandler
 
 COOKIE_KEY = 'c'
 cookie_set = set()
-MIN_PORT = 3000
+MIN_PORT = 1000
 
 
 class AdminHtmlHandler(RequestHandler):
@@ -109,7 +109,10 @@ class AdminHttpApiHandler(RequestHandler):
             client_to_server_config = ContextUtils.get_client_name_to_config_in_server()
             old_config = client_to_server_config[client_name]
             new_config = [x for x in old_config if x['name'] != name]
-            client_to_server_config[client_name] = new_config
+            if not new_config:
+                client_to_server_config.pop(client_name)
+            else:
+                client_to_server_config[client_name] = new_config
             self.write({
                 'code': 200,
                 'data': '',
@@ -158,11 +161,11 @@ class AdminHttpApiHandler(RequestHandler):
                     'msg': '本地port不合法'
                 })
                 return
-            if not name or (name in MyWebSocketaHandler.name_to_tcp_forward_client):
+            if not name or (client_name, name) in MyWebSocketaHandler.client_name_and_name_to_tcp_forward_client:
                 self.write({
                     'code': 400,
                     'data': '',
-                    'msg': 'name不合法'
+                    'msg': 'name不合法或者重复'
                 })
                 return
             if self.is_port_in_use(remote_port):

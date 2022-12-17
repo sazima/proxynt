@@ -5,7 +5,7 @@ import traceback
 from asyncio import Lock
 from collections import defaultdict
 from threading import Thread
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Tuple
 
 from tornado.ioloop import IOLoop
 from tornado.websocket import WebSocketHandler
@@ -26,7 +26,7 @@ class MyWebSocketaHandler(WebSocketHandler):
     client_name: str
     push_config: PushConfigEntity
 
-    name_to_tcp_forward_client: Dict[str, TcpForwardClient] = {}
+    client_name_and_name_to_tcp_forward_client: Dict[Tuple[str, str], TcpForwardClient] = {}  # {客户端名称, 配置名称: 转发客户端}
     handler_to_names: Dict['MyWebSocketaHandler', Set[str]] = defaultdict(set)
     handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
@@ -68,7 +68,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                 data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
                 name = data['name']
                 uid = data['uid']
-                await self.name_to_tcp_forward_client[name].send_to_socket(uid, data['data'])
+                client_name_and_config_name = (self.client_name, name)
+                await self.client_name_and_name_to_tcp_forward_client[client_name_and_config_name].send_to_socket(uid, data['data'])
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
                     LoggerFactory.get_logger().info(f'get push config: {message_dict}')
@@ -92,10 +93,11 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if key != ContextUtils.get_password():
                         self.close(reason='invalid password')
                         raise InvalidPassword()
-                    this_name_to_tcp_forward_client = {}
+                    this_client_name_to_tcp_forward_client: Dict[Tuple[str, str], TcpForwardClient] = {}
                     name_set = set()
                     for d in data:
-                        if d['name'] in self.name_to_tcp_forward_client:
+                        client_name_and_config_name = (client_name, d['name'])
+                        if client_name_and_config_name in self.client_name_and_name_to_tcp_forward_client:
                             self.close(None, 'DuplicatedName')
                             raise DuplicatedName()
                         if d['name'] in name_set:
@@ -104,20 +106,21 @@ class MyWebSocketaHandler(WebSocketHandler):
                         ip_port = d['local_ip'] + ':' + str(d['local_port'])
                         client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop(),
                                                   IOLoop.current(), ip_port)
-                        this_name_to_tcp_forward_client[d['name']] = client
+                        this_client_name_to_tcp_forward_client[client_name_and_config_name] = client
                         name_set.add(d['name'])
                     task_list: List[Thread] = []
-                    for name, client in this_name_to_tcp_forward_client.items():
+                    for _, client in this_client_name_to_tcp_forward_client.items():
                         try:
                             client.bind_port()
                         except OSError:
-                            for _, client in this_name_to_tcp_forward_client.items():
+                            for _, client in this_client_name_to_tcp_forward_client.items():
                                 client.close()
                             raise
                         task_list.append(Thread(target=client.start_accept))
-                    self.name_to_tcp_forward_client.update(this_name_to_tcp_forward_client)
-                    for name, _ in this_name_to_tcp_forward_client.items():
-                        self.handler_to_names[self].add(name)
+                    self.client_name_and_name_to_tcp_forward_client.update(this_client_name_to_tcp_forward_client)
+                    for names, _ in this_client_name_to_tcp_forward_client.items():
+                        _, config_name = names
+                        self.handler_to_names[self].add(config_name)
                     for t in task_list:
                         t.start()
 
@@ -141,7 +144,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                 names = self.handler_to_names[self]
                 for name in names:
                     try:
-                        client = self.name_to_tcp_forward_client.pop(name)
+                        client_name_and_config_name = self.client_name, name
+                        client = self.client_name_and_name_to_tcp_forward_client.pop(client_name_and_config_name)
                         client.close()
                     except KeyError:
                         pass
