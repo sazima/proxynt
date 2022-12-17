@@ -23,9 +23,13 @@ from server.tcp_forward_client import TcpForwardClient
 
 
 class MyWebSocketaHandler(WebSocketHandler):
+    client_name: str
+    push_config: PushConfigEntity
+
     name_to_tcp_forward_client: Dict[str, TcpForwardClient] = {}
     handler_to_names: Dict['MyWebSocketaHandler', Set[str]] = defaultdict(set)
     handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
+    client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock = Lock()
 
     def _check_password(self, request_password: str) -> bool:
@@ -35,6 +39,7 @@ class MyWebSocketaHandler(WebSocketHandler):
         return password == request_password
 
     def open(self, *args: str, **kwargs: str):
+        self.client_name = None
         LoggerFactory.get_logger().info('new open websocket')
 
     async def write_message(self, message, binary=False):
@@ -63,13 +68,22 @@ class MyWebSocketaHandler(WebSocketHandler):
                 data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
                 name = data['name']
                 uid = data['uid']
-                # self.name_to_tcp_forward_client[name].uid_to_client[uid].send(data['data'])
                 await self.name_to_tcp_forward_client[name].send_to_socket(uid, data['data'])
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
                     LoggerFactory.get_logger().info(f'get push config: {message_dict}')
                     push_config: PushConfigEntity = message_dict['data']
+                    client_name = push_config['client_name']
+                    client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
+                    # todo 获取服务端配置
                     data: List[ClientData] = push_config['config_list']  # 配置
+                    name_in_client = {x['name'] for x in data}
+                    if client_name in client_name_to_config_in_server:
+                        for config_in_server in client_name_to_config_in_server[client_name]:
+                            if config_in_server['name'] in name_in_client:
+                                self.close(None, 'DuplicatedNameWithServerConfig')  # 与服务器上配置的名字重复
+                                raise DuplicatedName()
+                        data.extend(client_name_to_config_in_server[client_name])
                     key = push_config['key']
                     if key != ContextUtils.get_password():
                         self.close(reason='invalid password')
@@ -83,8 +97,9 @@ class MyWebSocketaHandler(WebSocketHandler):
                         if d['name'] in name_set:
                             self.close(None, 'DuplicatedName')
                             raise DuplicatedName()
+                        ip_port = d['local_ip'] + ':' + str(d['local_port'])
                         client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop(),
-                                                  IOLoop.current())
+                                                  IOLoop.current(), ip_port)
                         this_name_to_tcp_forward_client[d['name']] = client
                         name_set.add(d['name'])
                     task_list: List[Thread] = []
@@ -101,7 +116,11 @@ class MyWebSocketaHandler(WebSocketHandler):
                         self.handler_to_names[self].add(name)
                     for t in task_list:
                         t.start()
+
                     self.handler_to_recv_time[self] = time.time()
+                    self.client_name = client_name
+                    self.client_name_to_handler[client_name] = self
+                    self.push_config = push_config
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.handler_to_recv_time[self] = time.time()
             LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
@@ -125,6 +144,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                 self.handler_to_names.pop(self)
                 if self in self.handler_to_recv_time:
                     self.handler_to_recv_time.pop(self)
+                if self.client_name in self.client_name_to_handler:
+                    self.client_name_to_handler.pop(self.client_name)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise

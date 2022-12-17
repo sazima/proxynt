@@ -21,7 +21,7 @@ has_epool = hasattr(select, 'epoll')
 
 
 class TcpForwardClient:
-    def __init__(self, websocket_handler: 'MyWebSocketaHandler', name: str, listen_port: int, loop, tornado_loop):
+    def __init__(self, websocket_handler: 'MyWebSocketaHandler', name: str, listen_port: int, loop, tornado_loop, ip_port: str):
         self.close_lock = Lock()
         from server.websocket_handler import MyWebSocketaHandler
         self.websocket_handler = websocket_handler  # type: MyWebSocketaHandler
@@ -35,6 +35,7 @@ class TcpForwardClient:
         self.tornado_loop = tornado_loop
         self.socket_event_loop = EPool() if has_epool else SelectPool()
         self.socket_event_loop.add_callback_function(self.handle_message)
+        self.ip_port: str = ip_port
 
     def handle_message(self, each: socket.socket):
         # 发送到websocket
@@ -49,7 +50,8 @@ class TcpForwardClient:
             'data': {
                 'name': self.name,
                 'data': recv,
-                'uid': uid
+                'uid': uid,
+                'ip_port': self.ip_port
             }
         }
         if not recv:

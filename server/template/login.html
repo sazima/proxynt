@@ -1,0 +1,46 @@
+{% extends "./base.html" %}
+{% block body%}
+
+<div id="app">
+        <el-form :model="form">
+            <el-form-item label="密码 " :label-width="formLabelWidth">
+                <el-input v-model="form.password" autocomplete="off" type="password"></el-input>
+            </el-form-item>
+        </el-form>
+    <el-button @click="handleLogin">登录</el-button>
+</div>
+<script>
+    new Vue({
+        el: '#app',
+        delimiters: ['{[', ']}']   , // 这句可以指定 {[ ]} 为插值表达式的新符号
+        data() {
+            return {
+                formLabelWidth: '120px',
+                form: {
+                    password: ''
+                }
+            }
+        },
+        mounted() {
+        },
+        methods: {
+            handleLogin() {
+                const url = window.location.href
+
+                axios.post(url, this.form).then(res=> {
+                    if (res.data.code !== 200) {
+                        return alert(res.data.msg)
+                    }
+                    location.reload();
+                }).catch(err => {
+                    console.log(err)
+                    alert('服务器出现错误')
+                })
+
+            }
+        }
+    })
+</script>
+
+
+{% end %}

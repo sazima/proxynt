@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import signal
+import socket
+
 import sys
 import threading
 import time
@@ -39,8 +41,7 @@ name_to_level = {
 OPEN_CLOSE_LOCK = threading.Lock()
 
 
-def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
-    name_to_addr: Dict[str, Tuple[str, int]] = dict()
+def get_config() -> ClientConfigEntity:
     parser = OptionParser(usage="usage: %prog -c config_c.json -l info")
     parser.add_option("-c", "--config",
                       type='str',
@@ -63,15 +64,14 @@ def get_config() -> Tuple[ClientConfigEntity, Dict[str, Tuple[str, int]]]:
     config_path = options.config
     with open(config_path, 'r') as rf:
         config_data: ClientConfigEntity = json.loads(rf.read())
+    ContextUtils.set_config_file_path(os.path.abspath(config_path))
     ContextUtils.set_password(config_data['server']['password'])
     name_set: Set[str] = set()
     for client in config_data['client']:
         if client['name'] in name_set:
             raise DuplicatedName()
         name_set.add(client['name'])
-        addr = (client['local_ip'], client['local_port'])
-        name_to_addr[client['name']] = addr
-    return config_data, name_to_addr
+    return config_data
 
 
 def on_message(ws, message: bytes):
@@ -85,7 +85,7 @@ def on_message(ws, message: bytes):
             uid = data['uid']
             name = data['name']
             b = data['data']
-            forward_client.create_socket(name, uid)
+            forward_client.create_socket(name, uid, data['ip_port'])
             forward_client.send_by_uid(uid, b)
         if message_data['type_'] == MessageTypeConstant.PING:
             heart_beat_task.set_recv_heart_beat_time(time.time())
@@ -110,9 +110,11 @@ def on_open(ws):
     with OPEN_CLOSE_LOCK:
         LoggerFactory.get_logger().info('open success')
         push_client_data: List[ClientData] = config_data['client']
+        client_name = config_data.get('client_name', socket.gethostname())
         push_configs: PushConfigEntity = {
             'key': ContextUtils.get_password(),
-            'config_list': push_client_data
+            'config_list': push_client_data,
+            "client_name": client_name
         }
         message: MessageEntity = {
             'type_': MessageTypeConstant.PUSH_CONFIG,
@@ -144,7 +146,7 @@ def run_client(ws: websocket.WebSocketApp):
 
 if __name__ == "__main__":
     # websocket.enableTrace(True)
-    config_data, name_to_addr = get_config()
+    config_data = get_config()
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)
     server_config = config_data['server']
@@ -165,7 +167,7 @@ if __name__ == "__main__":
                                 # on_error=on_error,
                                 on_close=on_close,
                                 on_open=on_open)
-    forward_client = TcpForwardClient(name_to_addr, ws)
+    forward_client = TcpForwardClient( ws)
     heart_beat_task = HeatBeatTask(ws)
     LoggerFactory.get_logger().info('start run_forever')
     Thread(target=run_client, args=(ws, )).start()  # 为了使用tornado的ioloop 方便设置超时

@@ -26,13 +26,13 @@ class HeartBeatTask:
     def send_heart_beat(self):
         asyncio.set_event_loop(self.loop)
         LoggerFactory.get_logger().debug('send heart beat')
-        handler_to_names = MyWebSocketaHandler.handler_to_names
+        client_name_to_handler = MyWebSocketaHandler.client_name_to_handler
         ping_message: MessageEntity = {
             'type_': MessageTypeConstant.PING,
             'data': None
         }
 
-        for h in handler_to_names.keys():
+        for h in client_name_to_handler.values():
             try:
                 asyncio.ensure_future(h.write_message(NatSerialization.dumps(ping_message, ContextUtils.get_password()), binary=True))
             except Exception:

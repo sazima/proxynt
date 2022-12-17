@@ -1,3 +1,7 @@
+from typing import List, Dict
+
+from entity.message.push_config_entity import ClientData
+
 c = {}
 
 
@@ -7,6 +11,8 @@ class ContextUtils:
     _port = '_port'
     _password_key = '_password_key'
     _log_path = '_log_path'
+    _config_file_path = '_config_file_path'
+    _client_name_to_config_in_server = '_client_name_to_config_in_server'
 
     @classmethod
     def get_password(cls) -> str:
@@ -37,8 +43,15 @@ class ContextUtils:
         c[cls._websocket_path] = path
 
     @classmethod
-    def get_websocket_path(cls):
+    def get_websocket_path(cls) -> str:
         return c[cls._websocket_path]
+
+    @classmethod
+    def set_config_file_path(cls, path):
+        c[cls._config_file_path] = path
+    @classmethod
+    def get_config_file_path(cls) -> str:
+        return c[cls._config_file_path]
 
     @classmethod
     def set_log_file(cls, path):
@@ -47,3 +60,12 @@ class ContextUtils:
     @classmethod
     def get_log_file(cls) -> str:
         return c[cls._log_path]
+
+    @classmethod
+    def set_client_name_to_config_in_server(cls, data):
+        c[cls._client_name_to_config_in_server] = data
+
+    @classmethod
+    def get_client_name_to_config_in_server(cls) -> Dict[str, List[ClientData]]:
+        """在server端添加的配置"""
+        return c[cls._client_name_to_config_in_server]

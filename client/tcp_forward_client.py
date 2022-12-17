@@ -19,10 +19,10 @@ has_epool = hasattr(select, 'epoll')
 
 
 class TcpForwardClient:
-    def __init__(self, name_to_addr: Dict[str, Tuple[str, int]], ws: websocket):
+    def __init__(self, ws: websocket):
         self.uid_to_socket: Dict[str, socket.socket] = dict()
         self.socket_to_uid: Dict[socket.socket, str] = dict()
-        self.name_to_addr: Dict[str, Tuple[str, int]] = name_to_addr
+        # self.name_to_addr: Dict[str, Tuple[str, int]] = name_to_addr
         self.uid_to_name: Dict[str, str] = dict()
         self.is_running = True
         self.ws = ws
@@ -46,7 +46,8 @@ class TcpForwardClient:
             'data': {
                 'name': self.uid_to_name[uid],
                 'data': recv,
-                'uid': uid
+                'uid': uid,
+                'ip_port': ''  # 这个对服务端没有用, 因此写了个空
             }
         }
         start_time = time.time()
@@ -58,14 +59,15 @@ class TcpForwardClient:
             except Exception:
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
 
-    def create_socket(self, name: str, uid: str):
+    def create_socket(self, name: str, uid: str, ip_port: str):
         with self.lock:
             if uid not in self.uid_to_socket:
                 try:
                     LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     s.settimeout(5)
-                    s.connect(self.name_to_addr[name])
+                    ip, port = ip_port.split(':')
+                    s.connect((ip, int(port)))
                     self.uid_to_socket[uid] = s
                     self.socket_to_uid[s] = uid
                     self.uid_to_name[uid] = name

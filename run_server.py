@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os.path
+
 import sys
 from optparse import OptionParser
 
@@ -11,6 +13,7 @@ from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.server_config_entity import ServerConfigEntity
+from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler
 from server.heart_beat_task import HeartBeatTask
 from server.websocket_handler import MyWebSocketaHandler
 
@@ -51,6 +54,7 @@ def load_config() -> ServerConfigEntity:
     config_path = config_path or DEFAULT_CONFIG
     with open(config_path, 'r') as rf:
         content_str = rf.read()
+    ContextUtils.set_config_file_path(os.path.abspath(config_path))
     content_json: ServerConfigEntity = json.loads(content_str)
     password = content_json.get('password', '')
     port = content_json.get('port', )
@@ -64,15 +68,22 @@ def load_config() -> ServerConfigEntity:
     ContextUtils.set_websocket_path(path)
     ContextUtils.set_port(int(port))
     ContextUtils.set_log_file(content_json.get('log_file'))
+    return content_json
 
 
 if __name__ == "__main__":
     server_config = load_config()
+    ContextUtils.set_client_name_to_config_in_server(server_config.get('client_config') or {})
+    websocket_path = ContextUtils.get_websocket_path()
+    admin_html_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH  # 管理网页路径
+    admin_api_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/api'  # 管理api路径
     app = tornado.web.Application([
-        (ContextUtils.get_websocket_path(), MyWebSocketaHandler),
-    ])
+        (websocket_path, MyWebSocketaHandler),
+        (admin_html_path, AdminHtmlHandler),
+        (admin_api_path, AdminHttpApiHandler),
+    ], static_path='server/template', template_path='server/template', debug=True)
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
-    LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}..')
+    LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}, websocket_path: {websocket_path}, admin_path: {admin_html_path}')
     heart_beat_task = HeartBeatTask(asyncio.get_event_loop())
     tornado.ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
     tornado.ioloop.IOLoop.current().start()

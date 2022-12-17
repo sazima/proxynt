@@ -12,4 +12,5 @@ class ClientData(TypedDict):
 
 class PushConfigEntity(TypedDict):
     key: str
-    config_list: List[ClientData]
+    config_list: List[ClientData]  # 转发配置列表
+    client_name: str  # 客户端名称
