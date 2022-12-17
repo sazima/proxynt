@@ -132,7 +132,9 @@
                 this.dialogFormVisible  = true
             },
             submitAdd() {
-                const url = window.location.href + '/api'
+                // const url = window.location.href + '/api'
+                var url = window.location.href.split('?')[0] + '/api'
+
                 console.log(this.form)
                 axios.post(url, this.form ).then(res=> {
                     if (res.data.code !== 200) {
@@ -147,8 +149,7 @@
                 })
             },
             handleDelete(client_name, name){
-                console.log(client_name, name)
-                const url = window.location.href + '/api'
+                var url = window.location.href.split('?')[0] + '/api'
                 const params = {
                     client_name: client_name,
                     name: name
@@ -169,7 +170,7 @@
 
             },
             getClientList() {
-                const url = window.location.href + '/api'
+                var url = window.location.href.split('?')[0] + '/api'
                 axios.get(url, {
                     headers: {token: localStorage.getItem('token')}
                 }).then(res=> {
