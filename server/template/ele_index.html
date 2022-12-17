@@ -31,7 +31,7 @@
                         </el-table-column>
                         <el-table-column
                                 prop="local_port"
-                                label="远程端口"
+                                label="本地端口"
                                 width="180">
                         </el-table-column>
                         <el-table-column label="操作">
@@ -127,6 +127,13 @@
         },
         methods: {
             handleAdd(row) {
+                this.form = {
+                    client_name: '',
+                    name: '',
+                    local_port: '',
+                    local_ip: '127.0.0.1',
+                    remote_port: ''
+                }
                 this.form.client_name = row.client_name
                 console.log(row);
                 this.dialogFormVisible  = true

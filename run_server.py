@@ -84,7 +84,7 @@ if __name__ == "__main__":
         (websocket_path, MyWebSocketaHandler),
         (admin_html_path, AdminHtmlHandler),
         (admin_api_path, AdminHttpApiHandler),
-    ], static_path=static_path, static_url_prefix=status_url_path, template_path=template_path, debug=True)
+    ], static_path=static_path, static_url_prefix=status_url_path, template_path=template_path, debug=False)
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}, websocket_path: {websocket_path}, admin_path: {admin_html_path}')
     heart_beat_task = HeartBeatTask(asyncio.get_event_loop())
