@@ -77,13 +77,14 @@ if __name__ == "__main__":
     websocket_path = ContextUtils.get_websocket_path()
     admin_html_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH  # 管理网页路径
     admin_api_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/api'  # 管理api路径
+    status_url_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/static'  # static
     static_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
     template_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
     app = tornado.web.Application([
         (websocket_path, MyWebSocketaHandler),
         (admin_html_path, AdminHtmlHandler),
         (admin_api_path, AdminHttpApiHandler),
-    ], static_path=static_path, template_path=template_path, debug=True)
+    ], static_path=static_path, static_url_prefix=status_url_path, template_path=template_path, debug=True)
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}, websocket_path: {websocket_path}, admin_path: {admin_html_path}')
     heart_beat_task = HeartBeatTask(asyncio.get_event_loop())
