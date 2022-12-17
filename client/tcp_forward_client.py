@@ -113,7 +113,8 @@ class TcpForwardClient:
             'data': {
                 'name': self.uid_to_name[uid],
                 'data': b'',
-                'uid': uid
+                'uid': uid,
+                'ip_port': ''
             }
         }
         start_time = time.time()
