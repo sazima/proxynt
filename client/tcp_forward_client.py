@@ -64,18 +64,20 @@ class TcpForwardClient:
                 try:
                     LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    self.uid_to_socket[uid] = s
-                    self.uid_to_name[uid] = name
+
+
                     s.settimeout(5)
                     ip, port = ip_port.split(':')
                     s.connect((ip, int(port)))
+                    self.uid_to_socket[uid] = s  #
+                    self.uid_to_name[uid] = name
                     self.socket_to_uid[s] = uid
                     LoggerFactory.get_logger().debug(f'register socket {name}, {uid}')
                     self.socket_event_loop.register(s)
                     LoggerFactory.get_logger().debug(f'register socket success {name}, {uid}')
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
-                    self.close_remote_socket(uid)
+                    self.close_remote_socket(uid, name)
             else:
                 LoggerFactory.get_logger().debug(f'socket  already create')
 
@@ -106,11 +108,11 @@ class TcpForwardClient:
             self.uid_to_name.clear()
             self.is_running = False
 
-    def close_remote_socket(self, uid: str):
+    def close_remote_socket(self, uid: str, name: str = None):
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
-                'name': self.uid_to_name[uid],
+                'name': self.uid_to_name.get(uid) if name is None else name,
                 'data': b'',
                 'uid': uid,
                 'ip_port': ''

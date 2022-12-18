@@ -61,7 +61,8 @@ class SelectPool(SocketLoop):
                 try:
                     ready = self.selector.select(timeout=SystemConstant.DEFAULT_TIMEOUT)
                 except OSError:
-                    print('00000os error')
+                    # 监听列表为空的时候, windows会有os error
+                    # LoggerFactory.get_logger().warn
                     time.sleep(0.5)
                     continue
                 for key, mask in ready:
