@@ -29,7 +29,7 @@ python run_client.py -c config_c.json
 python run_server.py -c config_s.json
 ```
 
-服务端ui: 
+服务端ui
 ```
 管理页面路径为websocket路径+admin,
 比如 
@@ -57,12 +57,12 @@ http://192.168.9.224:18888/websocketpath1/admin
 ```
 
 说明: 
-- port: 监听端口
-- password: 连接密码
-- path: websocket路径
-- admin: 管理页配置(非必须)
-- admin.enable: 是否启动管理页
-- admin.admin_password: 管理密码
+- `port`: 监听端口
+- `password`: 连接密码
+- `path': websocket路径
+- `admin`: 管理页配置(非必须)
+- `admin.enable`: 是否启用管理页
+- `admin.admin_password`: 管理密码
 
 然后启动:
 `python run_server.py -c config_s.json `
@@ -108,8 +108,7 @@ http://192.168.9.224:18888/websocketpath/admin
 
 ## 完整配置说明
 
-config_s.json
-客户端:
+- 客户端 config_c.json
 ```json5
 {
   "server": {  // 要连接的服务端配置
@@ -140,8 +139,7 @@ config_s.json
 ```
 
 
-客户端:
-config_c.json
+- 服务端 config_c.json
 ```json5
 {
     "port": 18888,  // 监听端口
