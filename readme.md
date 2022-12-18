@@ -97,10 +97,9 @@ http://192.168.9.224:18888/websocketpath/admin
 
 ## 完整配置说明
 
-
+config_s.json
 客户端:
-
-```json
+```json5
 {
   "server": {  // 要连接的服务端配置
     "port": 18888,  // 端口
@@ -131,9 +130,8 @@ http://192.168.9.224:18888/websocketpath/admin
 
 
 客户端:
-
-
-```json
+config_c.json
+```json5
 {
     "port": 18888,  // 监听端口
     "password": "helloworld",  // 密码
