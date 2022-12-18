@@ -25,7 +25,7 @@ class HeartBeatTask:
 
     def send_heart_beat(self):
         asyncio.set_event_loop(self.loop)
-        LoggerFactory.get_logger().debug('send heart beat')
+        # LoggerFactory.get_logger().debug('send heart beat')
         client_name_to_handler = MyWebSocketaHandler.client_name_to_handler
         ping_message: MessageEntity = {
             'type_': MessageTypeConstant.PING,
@@ -44,7 +44,7 @@ class HeartBeatTask:
         asyncio.set_event_loop(self.loop)
         handler_to_recv_time = MyWebSocketaHandler.handler_to_recv_time
         for h, t in handler_to_recv_time.items():
-            LoggerFactory.get_logger().debug('time %s ', t)
+            # LoggerFactory.get_logger().debug('time %s ', t)
             if (time.time() - t) > SystemConstant.MAX_HEART_BEAT_SECONDS:
                 LoggerFactory.get_logger().info(f'receive heart timeout {time.time() - t}, close client ')
                 try:

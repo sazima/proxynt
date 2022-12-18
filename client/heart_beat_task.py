@@ -43,24 +43,26 @@ class HeatBeatTask:
 
     def send_heart_beat(self):
         if self.is_running:
-            LoggerFactory.get_logger().debug('start send heart beat  ')
+            # LoggerFactory.get_logger().debug('start send heart beat  ')
             ping_message: MessageEntity = {
                 'type_': MessageTypeConstant.PING,
                 'data': None
             }
             self.ws.send(NatSerialization.dumps(ping_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
-            LoggerFactory.get_logger().debug('send client heart beat success ')
+            # LoggerFactory.get_logger().debug('send client heart beat success ')
         else:
-            LoggerFactory.get_logger().debug('not running , skip send heart beat ')
+            pass
+            # LoggerFactory.get_logger().debug('not running , skip send heart beat ')
 
     def check_recv_heart_beat_time(self):
         """超时关闭"""
         if self.is_running:
-            LoggerFactory.get_logger().debug('time %s ', self.recv_heart_beat_time)
+            # LoggerFactory.get_logger().debug('time %s ', self.recv_heart_beat_time)
             if (time.time() - self.recv_heart_beat_time) > SystemConstant.MAX_HEART_BEAT_SECONDS:
                 LoggerFactory.get_logger().info(f'receive heart timeout {time.time() - self.recv_heart_beat_time}, close client  ')
                 self.ws.close()  # 有时候不会自己调用on_close 方法
         else:
+            pass
             LoggerFactory.get_logger().debug('not running , skip check recv heart beat ')
 
     def _close_and_on_close(self):

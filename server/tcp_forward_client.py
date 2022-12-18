@@ -10,7 +10,7 @@ from typing import Dict
 
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
-from common.pool import EPool, SelectPool
+from common.pool import SelectPool
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
@@ -33,7 +33,7 @@ class TcpForwardClient:
         self.client_to_uid: Dict[socket.socket, str] = dict()
         # self.fileno_to_client: Dict[int, socket.socket] = dict()
         self.tornado_loop = tornado_loop
-        self.socket_event_loop = EPool() if has_epool else SelectPool()
+        self.socket_event_loop =  SelectPool()
         self.socket_event_loop.add_callback_function(self.handle_message)
         self.ip_port: str = ip_port
 
@@ -84,7 +84,23 @@ class TcpForwardClient:
                 uid = uuid.uuid4().hex
                 self.uid_to_client[uid] = client
                 self.client_to_uid[client] = uid
+                Thread(target=self.request_to_connect, args=(uid, )).start()
                 self.socket_event_loop.register(client)
+
+    def request_to_connect(self, uid: str):
+        """请求连接客户端"""
+        send_message: MessageEntity = {
+            'type_': MessageTypeConstant.REQUEST_TO_CONNECT,
+            'data': {
+                'name': self.name,
+                'data': ''.encode(),
+                'uid': uid,
+                'ip_port': self.ip_port
+            }
+        }
+        self.tornado_loop.add_callback(
+            partial(self.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True
+        )
 
     async def send_to_socket(self, uid: str, message: bytes):
         send_start_time = time.time()

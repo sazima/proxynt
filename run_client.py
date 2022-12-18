@@ -87,7 +87,13 @@ def on_message(ws, message: bytes):
             b = data['data']
             forward_client.create_socket(name, uid, data['ip_port'])
             forward_client.send_by_uid(uid, b)
-        if message_data['type_'] == MessageTypeConstant.PING:
+        elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT:
+            data: TcpOverWebsocketMessage = message_data['data']
+            uid = data['uid']
+            name = data['name']
+            b = data['data']
+            forward_client.create_socket(name, uid, data['ip_port'])
+        elif message_data['type_'] == MessageTypeConstant.PING:
             heart_beat_task.set_recv_heart_beat_time(time.time())
 
     except Exception:

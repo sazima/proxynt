@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os.path
+import signal
 
 import sys
 from optparse import OptionParser
@@ -66,7 +67,12 @@ def load_config() -> ServerConfigEntity:
     return content_json
 
 
+def signal_handler(sig, frame):
+    print('You pressed Ctrl+C!')
+    os._exit(0)
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal_handler)
     server_config = load_config()
     ContextUtils.set_password(server_config['password'])
     ContextUtils.set_websocket_path(server_config['path'])

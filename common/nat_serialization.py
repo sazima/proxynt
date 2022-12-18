@@ -25,7 +25,7 @@ class NatSerialization:
         b = b''
         type_ = data['type_']
         b += type_.encode()
-        if type_ == MessageTypeConstant.WEBSOCKET_OVER_TCP:
+        if type_ in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
             data_content: TcpOverWebsocketMessage = data['data']
             uid = data_content['uid']  # 长度32
             name = data_content['name']
@@ -46,7 +46,8 @@ class NatSerialization:
     def loads(cls, byte_data: bytes, key: str) -> MessageEntity:
         byte_data = EncryptUtils.decode(byte_data, key)
         type_ = byte_data[0:1]
-        if type_ == MessageTypeConstant.WEBSOCKET_OVER_TCP.encode():
+        if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
+        # if type_ == MessageTypeConstant.WEBSOCKET_OVER_TCP.encode():
             # I是uint32, 占4个字节, unsigned __int32	0 到 4,294,967,295;  uid是固定32
             len_name, len_ip_port, len_bytes = struct.unpack('BBI', byte_data[1:9])
             uid, name, ip_port,  socket_dta = struct.unpack(f'32s{len_name}s{len_ip_port}s{len_bytes}s', byte_data[9:])

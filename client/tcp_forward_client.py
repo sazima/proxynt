@@ -9,13 +9,12 @@ import websocket
 
 from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
-from common.pool import EPool, SelectPool
+from common.pool import SelectPool
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
-has_epool = hasattr(select, 'epoll')
 
 
 class TcpForwardClient:
@@ -28,7 +27,7 @@ class TcpForwardClient:
         self.ws = ws
         self.lock = Lock()
 
-        self.socket_event_loop = EPool() if has_epool else SelectPool()
+        self.socket_event_loop =  SelectPool()
         self.socket_event_loop.add_callback_function(self.handle_message)
 
     def start_forward(self):
@@ -65,12 +64,12 @@ class TcpForwardClient:
                 try:
                     LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
                     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self.uid_to_socket[uid] = s
+                    self.uid_to_name[uid] = name
                     s.settimeout(5)
                     ip, port = ip_port.split(':')
                     s.connect((ip, int(port)))
-                    self.uid_to_socket[uid] = s
                     self.socket_to_uid[s] = uid
-                    self.uid_to_name[uid] = name
                     LoggerFactory.get_logger().debug(f'register socket {name}, {uid}')
                     self.socket_event_loop.register(s)
                     LoggerFactory.get_logger().debug(f'register socket success {name}, {uid}')
