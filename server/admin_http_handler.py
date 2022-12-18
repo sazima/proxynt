@@ -11,6 +11,7 @@ from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.server_config_entity import ServerConfigEntity
 from server.websocket_handler import MyWebSocketaHandler
 
+# todo: 身份认证
 COOKIE_KEY = 'c'
 cookie_set = set()
 MIN_PORT = 1000
@@ -145,7 +146,7 @@ class AdminHttpApiHandler(RequestHandler):
                 self.write({
                     'code': 400,
                     'data': '',
-                    'msg': '当前客户端不在线或不存在'
+                    'msg': '远程ip不能为空'
                 })
                 return
             if not local_ip:
