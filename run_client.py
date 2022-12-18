@@ -28,6 +28,12 @@ from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
 
+try:
+    from websocket._logging import _logger
+except (ImportError, ModuleNotFoundError):
+    _logger = None
+
+
 DEFAULT_CONFIG = './config_c.json'
 
 DEFAULT_LOGGER_LEVEL = logging.INFO
@@ -166,7 +172,9 @@ if __name__ == "__main__":
     log_path = config_data.get('log_file')
     ContextUtils.set_log_file(log_path)
     for h in LoggerFactory.get_logger().handlers:
-        websocket.enableTrace(True, handler=h, level=level_to_name[ContextUtils.get_log_level()])
+        websocket.enableTrace(True, handler=h)
+    if _logger:
+        _logger.setLevel(ContextUtils.get_log_level())
     url = ''
     if server_config['https']:
         url += 'wss://'

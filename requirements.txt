@@ -1,4 +1,4 @@
 tornado
-websocket-client
+websocket-client==1.3.1
 typing_extensions
 pytz
