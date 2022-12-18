@@ -38,6 +38,10 @@ name_to_level = {
     'warn': logging.WARN,
     'error': logging.ERROR
 }
+
+level_to_name = {
+    k: v.upper() for v, k in name_to_level.items()
+}
 OPEN_CLOSE_LOCK = threading.Lock()
 
 
@@ -151,6 +155,7 @@ def run_client(ws: websocket.WebSocketApp):
 
 
 if __name__ == "__main__":
+
     # websocket.enableTrace(True)
     config_data = get_config()
     signal.signal(signal.SIGINT, signal_handler)
@@ -160,7 +165,8 @@ if __name__ == "__main__":
         raise Exception('密码不能为空, password is required')
     log_path = config_data.get('log_file')
     ContextUtils.set_log_file(log_path)
-
+    for h in LoggerFactory.get_logger().handlers:
+        websocket.enableTrace(True, handler=h, level=level_to_name[ContextUtils.get_log_level()])
     url = ''
     if server_config['https']:
         url += 'wss://'
