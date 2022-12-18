@@ -7,7 +7,7 @@
 ## 特性
 
 1. 公网和内网机器之间通信使用 WebSocket
-2. 跨平台. 工具用到的 Python 第三方库有: tornado, websocket-client, typing_extensions
+2. 跨平台. 工具用到的 Python 第三方库有: tornado, typing_extensions
 
 ## 使用前
 
