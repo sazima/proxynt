@@ -3,12 +3,12 @@ import threading
 import time
 import traceback
 
-import websocket
 from tornado import ioloop
-from websocket import WebSocketConnectionClosedException
 
+from common import websocket
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
+from common.websocket import WebSocketConnectionClosedException
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils

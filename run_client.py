@@ -12,7 +12,7 @@ from optparse import OptionParser
 from threading import Thread
 from typing import List, Dict, Tuple, Set
 
-import websocket
+# import websocket
 from tornado import ioloop
 
 from client.heart_beat_task import HeatBeatTask
@@ -27,9 +27,10 @@ from entity.message.message_entity import MessageEntity
 from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
+from common import websocket
 
 try:
-    from websocket._logging import _logger
+    from common.websocket._logging import _logger
 except (ImportError, ModuleNotFoundError):
     _logger = None
 
@@ -161,8 +162,6 @@ def run_client(ws: websocket.WebSocketApp):
 
 
 if __name__ == "__main__":
-
-    # websocket.enableTrace(True)
     config_data = get_config()
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)
@@ -171,10 +170,6 @@ if __name__ == "__main__":
         raise Exception('密码不能为空, password is required')
     log_path = config_data.get('log_file')
     ContextUtils.set_log_file(log_path)
-    for h in LoggerFactory.get_logger().handlers:
-        websocket.enableTrace(True, handler=h)
-    if _logger:
-        _logger.setLevel(ContextUtils.get_log_level())
     url = ''
     if server_config['https']:
         url += 'wss://'

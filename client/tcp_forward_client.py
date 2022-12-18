@@ -5,8 +5,7 @@ import traceback
 from threading import Lock
 from typing import Dict, Tuple
 
-import websocket
-
+from common import websocket
 from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
 from common.pool import SelectPool
