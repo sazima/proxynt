@@ -33,7 +33,7 @@ python run_server.py -c config_s.json
 ```
 管理页面路径为websocket路径+admin,
 比如 
-http://192.168.9.229:18888/websocketpath1/admin
+http://192.168.9.224:18888/websocketpath1/admin
 ```
 
 ![原理](./ui.png)
@@ -42,7 +42,8 @@ http://192.168.9.229:18888/websocketpath1/admin
 
 假设公网机器的ip是 `192.168.9.224`
 
-#### 1. 在公网机器上配置`config_s.json`, 设置连接密码, 接受客户端配置的端口和websocket路径
+#### 1. 在公网机器上配置`config_s.json`
+
 ```json
 {
   "port": 18888,
@@ -54,11 +55,21 @@ http://192.168.9.229:18888/websocketpath1/admin
   }
 }
 ```
+
+说明: 
+- port: 监听端口
+- password: 连接密码
+- path: websocket路径
+- admin: 管理页配置(非必须)
+- admin.enable: 是否启动管理页
+- admin.admin_password: 管理密码
+
 然后启动:
 `python run_server.py -c config_s.json `
 
 #### 2. 在需要被访问的内网电脑上配置`config_c.json`
- 配置config_c.json
+
+配置config_c.json
  
 ```json
 {
@@ -108,7 +119,7 @@ config_s.json
     "password": "helloworld",  // 密码
     "path": "/websocket_path"  // websocket 路径
   },
-  "client": [  // 转发的客户端列表
+  "client": [  // 转发的配置列表
     {
       "name": "ssh",
       "remote_port": 1222,
