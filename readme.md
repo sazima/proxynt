@@ -135,7 +135,6 @@ http://192.168.9.224:18888/websocketpath/admin
   "client_name": "ubuntu1",  // 客户端名称, 要唯一
   "log_file": "/var/log/nt/nt.log"  // 日志路径
 }
-}
 ```
 
 
