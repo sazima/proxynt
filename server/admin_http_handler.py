@@ -28,7 +28,8 @@ class AdminHtmlHandler(RequestHandler):
         try:
             body_data= json.loads(self.request.body)
             password = body_data['password']
-            if password == ContextUtils.get_password():
+            admin_config = ContextUtils.get_admin_config()
+            if admin_config and admin_config['admin_password'] == password:
                 uid = uuid.uuid4().hex
                 cookie_set.add(uid)
                 self.set_cookie(COOKIE_KEY, uid)

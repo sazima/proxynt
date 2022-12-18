@@ -1,11 +1,13 @@
 from typing import List, Dict
 
 from entity.message.push_config_entity import ClientData
+from entity.server_config_entity import AdminEntity
 
 c = {}
 
 
 class ContextUtils:
+    _admin_config = '_admin_config'
     _websocket_path = '_websocket_path'
     _log_level = '_log_level'
     _port = '_port'
@@ -69,3 +71,10 @@ class ContextUtils:
     def get_client_name_to_config_in_server(cls) -> Dict[str, List[ClientData]]:
         """在server端添加的配置"""
         return c[cls._client_name_to_config_in_server]
+    @classmethod
+    def get_admin_config(cls) -> AdminEntity:
+        return c.get(cls._admin_config)
+
+    @classmethod
+    def set_admin_config(cls, data):
+        c[cls._admin_config] = data

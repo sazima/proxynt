@@ -47,10 +47,14 @@ http://192.168.9.229:18888/websocketpath1/admin
 {
   "port": 18888,
   "password": "helloworld",
-  "path": "/websocket_path"
+  "path": "/websocket_path",
+  "admin": {
+    "enable": true,  
+    "admin_password": "new_password"  
+  }
 }
 ```
-然后启动: 
+然后启动:
 `python run_server.py -c config_s.json `
 
 #### 2. 在需要被访问的内网电脑上配置`config_c.json`
@@ -89,4 +93,55 @@ ssh -oPort=12222 test@192.168.9.224
 
 ```
 http://192.168.9.224:18888/websocketpath/admin
+```
+
+## 完整配置说明
+
+
+客户端:
+
+```json
+{
+  "server": {  // 要连接的服务端配置
+    "port": 18888,  // 端口
+    "host": "192.168.9.224",  // 端ip
+    "https": false,  //服务端是否启动https
+    "password": "helloworld",  // 密码
+    "path": "/websocket_path"  // websocket 路径
+  },
+  "client": [  // 转发的客户端列表
+    {
+      "name": "ssh",
+      "remote_port": 1222,
+      "local_port": 22,
+      "local_ip": "127.0.0.1"
+    },
+    {
+      "name": "mongo",
+      "remote_port": 1223,
+      "local_port": 27017,
+      "local_ip": "127.0.0.1"
+    }
+  ],
+  "client_name": "ubuntu1",  // 客户端名称, 要唯一
+  "log_file": "/var/log/nt/nt.log"  // 日志路径
+}
+}
+```
+
+
+客户端:
+
+
+```json
+{
+    "port": 18888,  // 监听端口
+    "password": "helloworld",  // 密码
+    "path": "/websocket_path",  // websocket路径
+    "log_file": "/var/log/nt/nt.log",  // 日志路径
+    "admin": {  
+        "enable": true,  // 是否启用管理页
+        "admin_password": "new_password"  // 管理页密码
+    }
+}
 ```

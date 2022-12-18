@@ -56,7 +56,6 @@ def load_config() -> ServerConfigEntity:
         content_str = rf.read()
     ContextUtils.set_config_file_path(os.path.abspath(config_path))
     content_json: ServerConfigEntity = json.loads(content_str)
-    password = content_json.get('password', '')
     port = content_json.get('port', )
     path = content_json.get('path', DEFAULT_WEBSOCKET_PATH)
     if not path.startswith('/'):
@@ -64,27 +63,35 @@ def load_config() -> ServerConfigEntity:
         sys.exit()
     if not port:
         raise Exception('server port is required')
-    ContextUtils.set_password(password)
-    ContextUtils.set_websocket_path(path)
-    ContextUtils.set_port(int(port))
-    ContextUtils.set_log_file(content_json.get('log_file'))
     return content_json
 
 
 if __name__ == "__main__":
     server_config = load_config()
+    ContextUtils.set_password(server_config['password'])
+    ContextUtils.set_websocket_path(server_config['path'])
+    ContextUtils.set_port(int(server_config['port']))
+    ContextUtils.set_log_file(server_config.get('log_file'))
     ContextUtils.set_client_name_to_config_in_server(server_config.get('client_config') or {})
+    admin_enable = server_config.get('admin', {}).get('enable', False)  # 是否启动管理后台
+    admin_password = server_config.get('admin', {}).get('admin_password', server_config['password'])  # 管理后台密码
+    ContextUtils.set_admin_config(server_config.get('admin'))
     websocket_path = ContextUtils.get_websocket_path()
     admin_html_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH  # 管理网页路径
     admin_api_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/api'  # 管理api路径
     status_url_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/static'  # static
     static_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
     template_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
-    app = tornado.web.Application([
+    handlers = [
         (websocket_path, MyWebSocketaHandler),
-        (admin_html_path, AdminHtmlHandler),
-        (admin_api_path, AdminHttpApiHandler),
-    ], static_path=static_path, static_url_prefix=status_url_path, template_path=template_path, debug=False)
+    ]
+    if admin_enable:
+        handlers.extend([
+            (admin_html_path, AdminHtmlHandler),
+            (admin_api_path, AdminHttpApiHandler),
+
+        ])
+    app = tornado.web.Application(handlers, static_path=static_path, static_url_prefix=status_url_path, template_path=template_path)
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}, websocket_path: {websocket_path}, admin_path: {admin_html_path}')
     heart_beat_task = HeartBeatTask(asyncio.get_event_loop())

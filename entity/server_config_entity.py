@@ -9,10 +9,16 @@ class _ClientEntity(TypedDict):
     local_ip: str
 
 
+class AdminEntity(TypedDict):
+    enable: bool
+    admin_password: str
+
+
 class ServerConfigEntity(TypedDict):
     port: int
     password: str
     path: str
     log_file: str
+    admin: AdminEntity
 
     client_config: Dict[str, List[_ClientEntity]]  # 在服务端配置的
