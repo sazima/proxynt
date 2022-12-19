@@ -20,8 +20,6 @@ from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
-has_epool = hasattr(select, 'epoll')
-# has_epool = False
 
 class TcpForwardClient:
     _instance = None
@@ -51,7 +49,6 @@ class TcpForwardClient:
             cls._instance = cls(asyncio.get_event_loop(), tornado.ioloop.IOLoop.current())
             Thread(target=cls._instance.socket_event_loop.run).start()
         return cls._instance
-        pass
 
     def register_client(self, s: socket.socket):
         self.socket_event_loop.register(s, self.handle_message)

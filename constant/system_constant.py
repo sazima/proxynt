@@ -7,3 +7,5 @@ class SystemConstant:
     MAX_HEART_BEAT_SECONDS = 60  # 超过一定秒数没有心跳就关闭
     ADMIN_PATH = 'admin'
     GENERATOR_NAME_PREFIX = 'admin_'
+
+    ENCRYPT_METHOD = 'table'

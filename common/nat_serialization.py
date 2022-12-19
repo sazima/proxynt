@@ -1,7 +1,7 @@
 import json
 import struct
 
-from common.encrypt_utils1 import PrpCrypt
+from common.encrypt_utils import EncryptUtils
 from constant.message_type_constnat import MessageTypeConstant
 from entity.message.message_entity import MessageEntity
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
@@ -12,17 +12,16 @@ class NatSerialization:
     """
         定义协议:
         第0字节: 为报文类型 类型参考: MessageTypeConstant
-        第1字节之后是数据:
+        0-4: 表示报文长度
+        第5字节之后是数据:
             如果类型是转发tcp报文: 前1-9字节为两个unChar, 一个int32 (低位在前) 分别代表name长度, ip端口长度, tcp报文的长度; 第9字节之后是uid, name, ip端口, tcp报文
             如果类型是配置信息: 1-最后二进制转字符串是一个 Json 字符串
             如果类型websocket心跳: 长度为1个字节, 无数据
-        暂时没有加密报文, 因此使用的时候需要自己配置 Https
     """
 
     # 报文形式: 类型, 数据
     @classmethod
     def dumps(cls, data: MessageEntity, key: str) -> bytes:
-        b = b''
         type_ = data['type_']
         if type_ in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
             data_content: TcpOverWebsocketMessage = data['data']
@@ -47,17 +46,16 @@ class NatSerialization:
         else:
             b_data =  b'error'
         b_data_len = len(b_data)
-        b += type_.encode()  + struct.pack('I', b_data_len) + b_data
-        return PrpCrypt.encrypt(b, key)
+        b = type_.encode()  + struct.pack('I', b_data_len) + b_data
+        return EncryptUtils.encrypt(b, key)
 
     @classmethod
     def loads(cls, byte_data: bytes, key: str) -> MessageEntity:
-        byte_data = PrpCrypt.decrypt(byte_data, key)
+        byte_data = EncryptUtils.decrypt(byte_data, key)
         type_ = byte_data[0:1]
         data_len = struct.unpack('I', byte_data[1:5])[0]
         byte_data = byte_data[0:data_len + 5]  #
         if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
-        # if type_ == MessageTypeConstant.WEBSOCKET_OVER_TCP.encode():
             # I是uint32, 占4个字节, unsigned __int32	0 到 4,294,967,295;  uid是固定32
             len_name, len_ip_port, len_bytes = struct.unpack('BBI', byte_data[5:13])
             uid, name, ip_port,  socket_dta = struct.unpack(f'32s{len_name}s{len_ip_port}s{len_bytes}s', byte_data[13:])
@@ -81,6 +79,8 @@ class NatSerialization:
                 'data': None
             }
             return return_data
+        else:
+            raise Exception('error ')
 
 
 
@@ -90,16 +90,14 @@ if __name__ == '__main__':
         print(''.join("b'{}'".format(''.join('\\x{:02x}'.format(b) for b in msg))))
 
 
-    data = {'type_': '2',
+    data = {'type_': '5',
             'data': {'name': 'ssh',
-                     'data': b'SSH-2.0-OpenSSH_7.8\r\n',
-                     'uid': 'e18fe62fa05f446db95236c9826bfdd6',
+                     'data': b'SSH-2.0-OpenSSH_7.8\r\n' ,
+                     'uid': 'e18fe62fa05f446db95236c9826bfdd6 ',
                      'ip_port': '127.0.0.1:8888'}}
     key32 = 'xxxx'
     # salt = '!%F=-?Pst970'
     a = NatSerialization.dumps(data, key32)
-    _print_commend(a)
-    # print(pickle.dumps(a))
     print(a)
     b = NatSerialization.loads(a, key32)
     print(b)
