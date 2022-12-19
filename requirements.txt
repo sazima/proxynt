@@ -1,3 +1,4 @@
 tornado
 typing_extensions
 pytz
+pycryptodome==3.0
