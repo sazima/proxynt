@@ -163,7 +163,12 @@ class AdminHttpApiHandler(RequestHandler):
                     'msg': '本地port不合法'
                 })
                 return
-            if not name or (client_name, name) in MyWebSocketaHandler.client_name_and_name_to_tcp_forward_client:
+            if client_name in MyWebSocketaHandler.client_name_to_handler:
+                handler = MyWebSocketaHandler.client_name_to_handler[client_name]
+                names = handler.names
+            else:
+                names = set()
+            if not name or name in names:
                 self.write({
                     'code': 400,
                     'data': '',
