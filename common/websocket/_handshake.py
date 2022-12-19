@@ -52,7 +52,6 @@ def handshake(sock, url, hostname, port, resource, **options):
 
     header_str = "\r\n".join(headers)
     send(sock, header_str)
-    debug(f"request header: {header_str}")
 
     status, resp = _get_resp_headers(sock)
     if status in SUPPORTED_REDIRECT_STATUSES:
