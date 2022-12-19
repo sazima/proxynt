@@ -33,6 +33,7 @@ class TcpForwardClient:
         self.socket_event_loop.run()
 
     def handle_message(self, each: socket.socket):
+        # time.time()
         uid = self.socket_to_uid[each]
         try:
             recv = each.recv(SystemConstant.CHUNK_SIZE)
@@ -122,10 +123,10 @@ class TcpForwardClient:
 
     def send_by_uid(self, uid, msg: bytes):
         try:
-            LoggerFactory.get_logger().debug(f'send to {uid}, {msg}')
+            LoggerFactory.get_logger().debug(f'send to {uid}, {len(msg)}')
             s = self.uid_to_socket[uid]
             s.sendall(msg)
-            LoggerFactory.get_logger().debug(f'send success to {uid}, {msg}')
+            LoggerFactory.get_logger().debug(f'send success to {uid}, {len(msg)}')
             if not msg:
                 self.close_connection(s)
         except Exception:
