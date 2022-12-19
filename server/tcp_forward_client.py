@@ -205,14 +205,16 @@ class TcpForwardClient:
     def close_connection(self, socket_client: socket.socket):
         # todo
         LoggerFactory.get_logger().info(f'close {socket_client}')
-        with self.close_lock:
-            self.socket_event_loop.unregister(socket_client)
-            if socket_client not in self.client_to_uid:
-                return
-            uid = self.client_to_uid.pop(socket_client)
-            self.uid_to_client.pop(uid)
-            self.uid_to_listen_socket_server.pop(uid)
-            self.uid_to_name_ip_port.pop(uid)
+        # with self.close_lock:
+        if socket_client not in self.client_to_uid:
+            return
+        self.socket_event_loop.unregister(socket_client)
+        uid = self.client_to_uid.pop(socket_client)
+        self.uid_to_client.pop(uid)
+        listen_server_socket = self.uid_to_listen_socket_server.pop(uid)
+        self.uid_to_name_ip_port.pop(uid)
+        self.listen_socket_server_to_uid_set[listen_server_socket].remove(uid)
+
         socket_client.close()
 
     @classmethod
