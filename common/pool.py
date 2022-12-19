@@ -16,9 +16,9 @@ from constant.system_constant import SystemConstant
 
 class SocketLoop:
     def __init__(self):
-        self.is_running = False
+        self.is_running = True
         self.fileno_to_client: Dict[int, socket.socket] = dict()
-        self.call_back_function: List[callable] = []
+        # self.call_back_function: List[callable] = []
 
     # def register(self, s: socket.socket):
     #     self.fileno_to_client[s.fileno()] = s
@@ -44,9 +44,9 @@ class SelectPool(SocketLoop):
         super(SelectPool, self).__init__()
         self.selector = DefaultSelector()
 
-    def register(self, s: socket.socket):
+    def register(self, s: socket.socket, callable_):
         self.fileno_to_client[s.fileno()] = s
-        self.selector.register(s, EVENT_READ)
+        self.selector.register(s, EVENT_READ, callable_)
 
     def unregister(self, s: socket.socket):
         if s.fileno() in self.fileno_to_client:
@@ -71,7 +71,9 @@ class SelectPool(SocketLoop):
                     if client is None:
                         LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
                         continue
-                    self.call_back_function[0](client)
+                    callback = key.data
+                    callback(client)
+                    # self.call_back_function[0](client)
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
                 time.sleep(1)
