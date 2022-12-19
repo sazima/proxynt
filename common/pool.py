@@ -51,7 +51,10 @@ class SelectPool(SocketLoop):
     def unregister(self, s: socket.socket):
         if s.fileno() in self.fileno_to_client:
             self.fileno_to_client.pop(s.fileno())
+        try:
             self.selector.unregister(s)
+        except OSError:
+            LoggerFactory.get_logger().error(traceback.format_exc())
 
     def run(self):
         while self.is_running:
