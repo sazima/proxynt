@@ -1,5 +1,6 @@
 import asyncio
 import json
+import socket
 import time
 import traceback
 from asyncio import Lock
@@ -26,17 +27,11 @@ class MyWebSocketaHandler(WebSocketHandler):
     client_name: str
     push_config: PushConfigEntity
 
-    client_name_and_name_to_tcp_forward_client: Dict[Tuple[str, str], TcpForwardClient] = {}  # {客户端名称, 配置名称: 转发客户端}
-    handler_to_names: Dict['MyWebSocketaHandler', Set[str]] = defaultdict(set)
+    # client_name_and_name_to_tcp_forward_client: Dict[Tuple[str, str], TcpForwardClient] = {}  # {客户端名称, 配置名称: 转发客户端}
+    # handler_to_names: Dict['MyWebSocketaHandler', Set[str]] = defaultdict(set)
     handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock = Lock()
-
-    def _check_password(self, request_password: str) -> bool:
-        password = ContextUtils.get_password()
-        if not password and not request_password:
-            return True
-        return password == request_password
 
     def open(self, *args: str, **kwargs: str):
         self.client_name = None
@@ -57,6 +52,7 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self.on_message_async(m_bytes))
 
     async def on_message_async(self, message):
+        tcp_forward_client = TcpForwardClient.get_instance()
         try:
             message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
         except json.decoder.JSONDecodeError:
@@ -66,15 +62,17 @@ class MyWebSocketaHandler(WebSocketHandler):
             start_time = time.time()
             if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
                 data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
-                name = data['name']
+                # name = data['name']
                 uid = data['uid']
-                client_name_and_config_name = (self.client_name, name)
-                await self.client_name_and_name_to_tcp_forward_client[client_name_and_config_name].send_to_socket(uid, data['data'])
+                # client_name_and_config_name = (self.client_name, name)
+                await tcp_forward_client.send_to_socket(uid, data['data'])
+                # await self.client_name_and_name_to_tcp_forward_client[client_name_and_config_name].send_to_socket(uid, data['data'])
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
                     LoggerFactory.get_logger().info(f'get push config: {message_dict}')
                     push_config: PushConfigEntity = message_dict['data']
                     client_name = push_config['client_name']
+                    self.client_name = client_name
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
                     if client_name in self.client_name_to_handler:
                         self.close(None, 'DuplicatedClientName')  # 与服务器上配置的名字重复
@@ -93,39 +91,25 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if key != ContextUtils.get_password():
                         self.close(reason='invalid password')
                         raise InvalidPassword()
-                    this_client_name_to_tcp_forward_client: Dict[Tuple[str, str], TcpForwardClient] = {}
+
                     name_set = set()
                     for d in data:
-                        client_name_and_config_name = (client_name, d['name'])
-                        if client_name_and_config_name in self.client_name_and_name_to_tcp_forward_client:
-                            self.close(None, 'DuplicatedName')
-                            raise DuplicatedName()
                         if d['name'] in name_set:
                             self.close(None, 'DuplicatedName')
                             raise DuplicatedName()
-                        ip_port = d['local_ip'] + ':' + str(d['local_port'])
-                        client = TcpForwardClient(self, d['name'], d['remote_port'], asyncio.get_event_loop(),
-                                                  IOLoop.current(), ip_port)
-                        this_client_name_to_tcp_forward_client[client_name_and_config_name] = client
                         name_set.add(d['name'])
-                    task_list: List[Thread] = []
-                    for _, client in this_client_name_to_tcp_forward_client.items():
+                    listen_socket_list = []
+                    for d in data:
                         try:
-                            client.bind_port()
+                            listen_socket = tcp_forward_client.create_listen_socket(d['remote_port'])
                         except OSError:
-                            for _, client in this_client_name_to_tcp_forward_client.items():
-                                client.close()
+                            self.close(None, 'Address already in use')
+                            # tcp_forward_client.close_by_client_name(self.client_name)
                             raise
-                        task_list.append(Thread(target=client.start_accept))
-                    self.client_name_and_name_to_tcp_forward_client.update(this_client_name_to_tcp_forward_client)
-                    for names, _ in this_client_name_to_tcp_forward_client.items():
-                        _, config_name = names
-                        self.handler_to_names[self].add(config_name)
-                    for t in task_list:
-                        t.start()
-
+                        ip_port = d['local_ip'] + ':' + str(d['local_port'])
+                        tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self)
+                        listen_socket_list.append(listen_socket)
                     self.handler_to_recv_time[self] = time.time()
-                    self.client_name = client_name
                     self.client_name_to_handler[client_name] = self
                     self.push_config = push_config
             elif message_dict['type_'] == MessageTypeConstant.PING:
@@ -140,24 +124,15 @@ class MyWebSocketaHandler(WebSocketHandler):
     async def _on_close(self, code: int = None, reason: str = None) -> None:
         try:
             async with self.lock:
-                LoggerFactory.get_logger().info('close')
-                names = self.handler_to_names[self]
-                for name in names:
-                    try:
-                        client_name_and_config_name = self.client_name, name
-                        client = self.client_name_and_name_to_tcp_forward_client.pop(client_name_and_config_name)
-                        client.close()
-                    except KeyError:
-                        pass
-                self.handler_to_names.pop(self)
-                if self in self.handler_to_recv_time:
-                    self.handler_to_recv_time.pop(self)
-                if self.client_name in self.client_name_to_handler:
-                    self.client_name_to_handler.pop(self.client_name)
+                if self.client_name:
+                    if self in self.handler_to_recv_time:
+                        self.handler_to_recv_time.pop(self)
+                    if self.client_name in self.client_name_to_handler:
+                        self.client_name_to_handler.pop(self.client_name)
+                    TcpForwardClient.get_instance().close_by_client_name(self.client_name)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise
-
 
     def check_origin(self, origin: str) -> bool:
         return True

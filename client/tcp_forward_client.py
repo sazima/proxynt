@@ -27,7 +27,6 @@ class TcpForwardClient:
         self.lock = Lock()
 
         self.socket_event_loop =  SelectPool()
-        self.socket_event_loop.add_callback_function(self.handle_message)
 
     def start_forward(self):
         self.socket_event_loop.is_running = True
@@ -72,7 +71,7 @@ class TcpForwardClient:
                     self.uid_to_name[uid] = name
                     self.socket_to_uid[s] = uid
                     LoggerFactory.get_logger().debug(f'register socket {name}, {uid}')
-                    self.socket_event_loop.register(s)
+                    self.socket_event_loop.register(s, self.handle_message)
                     LoggerFactory.get_logger().debug(f'register socket success {name}, {uid}')
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())

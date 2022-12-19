@@ -16,6 +16,7 @@ from context.context_utils import ContextUtils
 from entity.server_config_entity import ServerConfigEntity
 from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler
 from server.heart_beat_task import HeartBeatTask
+from server.tcp_forward_client import TcpForwardClient
 from server.websocket_handler import MyWebSocketaHandler
 
 DEFAULT_CONFIG = './config_s.json'
@@ -88,6 +89,7 @@ if __name__ == "__main__":
     status_url_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/static'  # static
     static_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
     template_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
+    tcp_forward_client = TcpForwardClient.get_instance()
     handlers = [
         (websocket_path, MyWebSocketaHandler),
     ]
