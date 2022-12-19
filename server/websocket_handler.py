@@ -26,6 +26,7 @@ from server.tcp_forward_client import TcpForwardClient
 class MyWebSocketaHandler(WebSocketHandler):
     client_name: str
     push_config: PushConfigEntity
+    names: Set[str]
 
     # client_name_and_name_to_tcp_forward_client: Dict[Tuple[str, str], TcpForwardClient] = {}  # {客户端名称, 配置名称: 转发客户端}
     # handler_to_names: Dict['MyWebSocketaHandler', Set[str]] = defaultdict(set)
@@ -41,7 +42,7 @@ class MyWebSocketaHandler(WebSocketHandler):
         start_time = time.time()
         try:
             await (super(MyWebSocketaHandler, self).write_message(bytes(message), binary))
-            LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}')
+            LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}, len: {len(message)}')
             return
         except Exception:
             LoggerFactory.get_logger().info(message)
@@ -78,7 +79,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                         self.close(None, 'DuplicatedClientName')  # 与服务器上配置的名字重复
                         raise DuplicatedName()
                         pass
-                    # todo 获取服务端配置
                     data: List[ClientData] = push_config['config_list']  # 配置
                     name_in_client = {x['name'] for x in data}
                     if client_name in client_name_to_config_in_server:
@@ -98,6 +98,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                             self.close(None, 'DuplicatedName')
                             raise DuplicatedName()
                         name_set.add(d['name'])
+                    self.names = name_set
                     listen_socket_list = []
                     for d in data:
                         try:
@@ -107,7 +108,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                             # tcp_forward_client.close_by_client_name(self.client_name)
                             raise
                         ip_port = d['local_ip'] + ':' + str(d['local_port'])
-                        tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self)
+                        await tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self)
                         listen_socket_list.append(listen_socket)
                     self.handler_to_recv_time[self] = time.time()
                     self.client_name_to_handler[client_name] = self
@@ -129,7 +130,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                         self.handler_to_recv_time.pop(self)
                     if self.client_name in self.client_name_to_handler:
                         self.client_name_to_handler.pop(self.client_name)
-                    TcpForwardClient.get_instance().close_by_client_name(self.client_name)
+                    await TcpForwardClient.get_instance().close_by_client_name(self.client_name)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise

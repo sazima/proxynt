@@ -7,6 +7,7 @@ import uuid
 from collections import defaultdict
 from functools import partial
 from threading import Thread, Lock
+from asyncio import Lock as AsyncioLock
 from typing import Dict, Tuple, List, Set
 
 import tornado
@@ -40,7 +41,8 @@ class TcpForwardClient:
 
         self.tornado_loop = tornado_loop
         self.close_lock = Lock()
-        self.client_name_to_lock: Dict[str, Lock] = dict()
+
+        self.client_name_to_lock: Dict[str, AsyncioLock] = dict()
         # self.socket_event_loop.add_callback_function(self.handle_message)
 
     @classmethod
@@ -54,46 +56,57 @@ class TcpForwardClient:
     def register_client(self, s: socket.socket):
         self.socket_event_loop.register(s, self.handle_message)
 
-    def register_listen_server(self, s: socket.socket, name: str, ip_port: str, websocket_handler: 'MyWebSocketaHandler'):
-        self.listen_socket_server_to_name_ip_port[s] = (name, ip_port)
-        self.listen_socket_server_to_handler[s] = websocket_handler
+    async def register_listen_server(self, s: socket.socket, name: str, ip_port: str, websocket_handler: 'MyWebSocketaHandler'):
         client_name = websocket_handler.client_name
-        self.client_name_to_listen_socket_server[client_name].append(s)
-        self.socket_event_loop.register(s, self.start_accept)
+        if client_name not in self.client_name_to_lock:
+            self.client_name_to_lock[client_name] = AsyncioLock()
+        async with self.client_name_to_lock.get(client_name):
+            self.listen_socket_server_to_name_ip_port[s] = (name, ip_port)
+            self.listen_socket_server_to_handler[s] = websocket_handler
+            self.client_name_to_listen_socket_server[client_name].append(s)
+            self.socket_event_loop.register(s, self.start_accept)
 
-    def close_by_client_name(self, client_name: str):
+    async def close_by_client_name(self, client_name: str):
         if client_name not in self.client_name_to_listen_socket_server:
             return
-        client_socket_list = []
-        server_socket_list = []
-        uid_list = []
+        if client_name not in self.client_name_to_lock:
+            self.client_name_to_lock[client_name] = AsyncioLock()
+        async with self.client_name_to_lock.get(client_name):
+            client_socket_list = []
+            server_socket_list = []
+            uid_list = []
 
-        for server in self.client_name_to_listen_socket_server[client_name]:
-            if server in self.listen_socket_server_to_uid_set:
-                for uid in self.listen_socket_server_to_uid_set[server]:
-                    uid_list.append(uid)
-                    client_socket_list.append(self.uid_to_client[uid])
-            server_socket_list.append(server)
-        for c in client_socket_list:
-            c.close()
-            self.socket_event_loop.unregister(c)
-            self.client_to_uid.pop(c)
-        for s in server_socket_list:
-            self.listen_socket_server_to_name_ip_port.pop(s)
-            if s in self.listen_socket_server_to_uid_set:
-                self.listen_socket_server_to_uid_set.pop(s)
-            self.listen_socket_server_to_handler.pop(s)
-            try:
-                self.socket_event_loop.unregister(s)
-                s.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-            s.close()
-        for u in uid_list:
-            self.uid_to_client.pop(u)
-            self.uid_to_listen_socket_server.pop(u)
-            self.uid_to_name_ip_port.pop(u)
-        self.client_name_to_listen_socket_server.pop(client_name)
+            for server in self.client_name_to_listen_socket_server[client_name]:
+                if server in self.listen_socket_server_to_uid_set:
+                    for uid in self.listen_socket_server_to_uid_set[server]:
+                        uid_list.append(uid)
+                        if uid in self.uid_to_client:
+                            client_socket_list.append(self.uid_to_client[uid])
+                server_socket_list.append(server)
+            for c in client_socket_list:
+                c.close()
+                self.socket_event_loop.unregister(c)
+                self.client_to_uid.pop(c)
+            for s in server_socket_list:
+                self.listen_socket_server_to_name_ip_port.pop(s)
+                if s in self.listen_socket_server_to_uid_set:
+                    self.listen_socket_server_to_uid_set.pop(s)
+                self.listen_socket_server_to_handler.pop(s)
+                try:
+                    self.socket_event_loop.unregister(s)
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                s.close()
+            for u in uid_list:
+                if u in self.uid_to_client:
+                    self.uid_to_client.pop(u)
+                if u in self.uid_to_listen_socket_server:
+                    self.uid_to_listen_socket_server.pop(u)
+                if u in self.uid_to_name_ip_port:
+                    self.uid_to_name_ip_port.pop(u)
+            self.client_name_to_listen_socket_server.pop(client_name)
+            self.client_name_to_lock.pop(client_name)
         # self.client_name_to_lock.o
 
     def handle_message(self, each: socket.socket):
