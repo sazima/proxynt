@@ -108,10 +108,12 @@ class TcpForwardClient:
             self.is_running = False
 
     def close_remote_socket(self, uid: str, name: str = None):
+        if name is None:
+            name = self.uid_to_name.get(uid, '')
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
-                'name': self.uid_to_name.get(uid) if name is None else name,
+                'name': name,
                 'data': b'',
                 'uid': uid,
                 'ip_port': ''
