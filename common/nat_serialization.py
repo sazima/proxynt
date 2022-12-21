@@ -11,12 +11,8 @@ from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 class NatSerialization:
     """
         定义协议:
-        第0字节: 为报文类型 类型参考: MessageTypeConstant
-        0-4: 表示报文长度
-        第5字节之后是数据:
-            如果类型是转发tcp报文: 前1-9字节为两个unChar, 一个int32 (低位在前) 分别代表name长度, ip端口长度, tcp报文的长度; 第9字节之后是uid, name, ip端口, tcp报文
-            如果类型是配置信息: 1-最后二进制转字符串是一个 Json 字符串
-            如果类型websocket心跳: 长度为1个字节, 无数据
+        字节:  0   | 1   -  4 |  5  -
+      说明:  类型  |  报文长度  |   报文详情
     """
 
     # 报文形式: 类型, 数据
