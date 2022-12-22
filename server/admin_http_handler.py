@@ -9,6 +9,7 @@ from common.logger_factory import LoggerFactory
 from context.context_utils import ContextUtils
 from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.server_config_entity import ServerConfigEntity
+from server.tcp_forward_client import TcpForwardClient
 from server.websocket_handler import MyWebSocketaHandler
 
 # todo: 身份认证
@@ -47,6 +48,15 @@ class AdminHtmlHandler(RequestHandler):
                 })
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
+
+
+
+
+class ShowVariableHandler(RequestHandler):
+    def get(self):
+        forward_client = TcpForwardClient.get_instance()
+        dict_ = forward_client.__dict__
+        self.write({str(k): str(v) for k , v in dict_.items()})
 
 
 
