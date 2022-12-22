@@ -28,7 +28,7 @@ class AdminHtmlHandler(RequestHandler):
 
     async def post(self):
         try:
-            body_data= json.loads(self.request.body)
+            body_data = json.loads(self.request.body)
             password = body_data['password']
             admin_config = ContextUtils.get_admin_config()
             if admin_config and admin_config['admin_password'] == password:
@@ -50,16 +50,14 @@ class AdminHtmlHandler(RequestHandler):
             LoggerFactory.get_logger().error(traceback.format_exc())
 
 
-
-
 class ShowVariableHandler(RequestHandler):
     def get(self):
         forward_client = TcpForwardClient.get_instance()
         dict_ = forward_client.__dict__
-        self.write({str(k): str(v) for k , v in dict_.items()})
-
-
-
+        self.write({
+            str(k): {str(k1): str(v1) for k1, v1 in v.items()} if isinstance(v, dict)
+            else str(v) for k, v in dict_.items()
+        })
 
 
 class AdminHttpApiHandler(RequestHandler):
