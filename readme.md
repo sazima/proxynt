@@ -6,9 +6,14 @@
 
 ## 特性
 
-1. 支持在服务端增加删除端口映射
-2. 公网和内网机器之间通信使用 WebSocket
+1. 支持在服务端增删端口映射
+2. 公网服务器和内网客户端之间只建立一个 WebSocket 连接
 3. 跨平台. 工具用到的 Python 第三方库有: tornado, typing_extensions
+
+
+## 常用场景
+1. 在家托管网站服务器
+2. 管理物联网设备
 
 ## 使用前
 
@@ -37,7 +42,7 @@ python run_server.py -c config_s.json
 http://192.168.9.224:18888/websocketpath1/admin
 ```
 
-![原理](./ui.png)
+![ui](./ui.png)
 
 ## 示例, 通过 SSH 访问内网机器
 
@@ -60,7 +65,7 @@ http://192.168.9.224:18888/websocketpath1/admin
 说明: 
 - `port`: 监听端口
 - `password`: 连接密码
-- `path': websocket路径
+- `path`: websocket路径
 - `admin`: 管理页配置(非必须)
 - `admin.enable`: 是否启用管理页
 - `admin.admin_password`: 管理密码
