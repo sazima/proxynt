@@ -20,7 +20,7 @@
 安装
 
 ```
-pip install https://github.com/sazima/nat_traversal/archive/master.zip 
+pip install https://github.com/sazima/proxynt/archive/master.zip 
 ```
 
 ## 使用
