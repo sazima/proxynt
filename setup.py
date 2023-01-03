@@ -2,6 +2,7 @@ import glob
 import os.path
 
 package_name = 'proxynt'
+version='0.0.2'
 import setuptools
 l = setuptools.find_packages(where='.')
 l = [package_name + '.'+ x for x in l]
@@ -14,7 +15,7 @@ font_file = glob.glob(os.path.join('server/template/css/fonts', '**.woff'))
 
 setuptools.setup(
     name=package_name,
-    version='0.0.1',
+    version=version,
     package_dir={
         package_name: '.',
     },

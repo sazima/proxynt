@@ -51,7 +51,29 @@ OPEN_CLOSE_LOCK = threading.Lock()
 
 
 def get_config() -> ClientConfigEntity:
-    parser = OptionParser(usage="usage: %prog -c config_c.json -l info")
+    parser = OptionParser(usage="""usage: %prog -c config_c.json 
+    
+config_c.json example: 
+{
+  "server": {
+    "port": 18888,
+    "host": "192.168.9.224",
+    "https": false,
+    "password": "helloworld",
+    "path": "/websocket_path"
+  },
+   "client_name": "ubuntu1",
+  "client": [
+    {
+      "name": "ssh1",
+      "remote_port": 12222,
+      "local_port": 22,
+      "local_ip": "127.0.0.1"
+    }
+  ],
+  "log_file": "/var/log/nt/nt.log"
+}
+    """)
     parser.add_option("-c", "--config",
                       type='str',
                       dest='config',
