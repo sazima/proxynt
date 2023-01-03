@@ -21,7 +21,8 @@
 
 ```
 git clone https://github.com/sazima/nat_traversal.git
-cd nat_traversal install
+cd nat_traversal 
+python setup.py install
 ```
 
 ## 使用
