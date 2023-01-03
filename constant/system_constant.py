@@ -9,3 +9,7 @@ class SystemConstant:
     GENERATOR_NAME_PREFIX = 'admin_'
 
     ENCRYPT_METHOD = 'table'
+
+
+    PACKAGE_NAME = 'proxynt'
+
