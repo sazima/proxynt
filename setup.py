@@ -16,6 +16,7 @@ font_file = glob.glob(os.path.join('server/template/css/fonts', '**.woff'))
 setuptools.setup(
     name=package_name,
     version=version,
+    zip_safe=True,
     package_dir={
         package_name: '.',
     },
