@@ -21,12 +21,14 @@ setuptools.setup(
     package_dir={
         package_name: '.',
     },
-    data_files=[
-        (f'{package_name}/server/template', html_file),
-        (f'{package_name}/server/template/js', js_file),
-        (f'{package_name}/server/template/css', css_file),
-        (f'{package_name}/server/template/css/fonts', font_file),
-    ],
+    # data_files=[
+    #     (f'{package_name}/server/template', html_file),
+    #     (f'{package_name}/server/template/js', js_file),
+    #     (f'{package_name}/server/template/css', css_file),
+    #     (f'{package_name}/server/template/css/fonts', font_file),
+    # ],
+    include_package_data=True,
+
     entry_points=f"""
     [console_scripts]
     nt_client = {package_name}.run_client:main
