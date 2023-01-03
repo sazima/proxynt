@@ -33,7 +33,9 @@ name_to_level = {
 
 
 def load_config() -> ServerConfigEntity:
-    parser = OptionParser(usage="""usage: %prog -c config_s.json, config_s.json example: 
+    parser = OptionParser(usage="""usage: %prog -c config_s.json
+    
+    config_s.json example: 
     {
     "port": 18888,
     "password": "helloworld",
@@ -44,6 +46,7 @@ def load_config() -> ServerConfigEntity:
         "admin_password": "new_password"
     },
     "client_config": {}
+    
 }""")
     parser.add_option("-c", "--config",
                       type='str',
