@@ -20,9 +20,7 @@
 安装
 
 ```
-git clone https://github.com/sazima/nat_traversal.git
-cd nat_traversal 
-python setup.py install
+pip install https://github.com/sazima/nat_traversal/archive/master.zip 
 ```
 
 ## 使用
