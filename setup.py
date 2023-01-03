@@ -14,8 +14,8 @@ setuptools.setup(
     },
     entry_points="""
     [console_scripts]
-    run_client = proxynt.run_client:main
-    run_server = proxynt.run_server:main
+    nt_client = proxynt.run_client:main
+    nt_server = proxynt.run_server:main
     """,
     packages=l,
     include_package_data=True,
