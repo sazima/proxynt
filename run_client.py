@@ -3,20 +3,20 @@ import logging
 import os
 import signal
 import socket
-
 import sys
 import threading
 import time
 import traceback
 from optparse import OptionParser
 from threading import Thread
-from typing import List, Dict, Tuple, Set
+from typing import List, Set
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# import websocket
 from tornado import ioloop
 
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
+from common import websocket
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
 from constant.message_type_constnat import MessageTypeConstant
@@ -27,13 +27,11 @@ from entity.message.message_entity import MessageEntity
 from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
-from common import websocket
 
 try:
     from common.websocket._logging import _logger
 except (ImportError, ModuleNotFoundError):
     _logger = None
-
 
 DEFAULT_CONFIG = './config_c.json'
 
@@ -85,65 +83,72 @@ def get_config() -> ClientConfigEntity:
     return config_data
 
 
-def on_message(ws, message: bytes):
-    try:
-        message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
-        start_time = time.time()
-        time_ = message_data['type_']
-        if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
-            # LoggerFactory.get_logger().debug(f'get websocket message {message_data}')
-            data: TcpOverWebsocketMessage = message_data['data']
-            uid = data['uid']
-            name = data['name']
-            b = data['data']
-            forward_client.create_socket(name, uid, data['ip_port'])
-            forward_client.send_by_uid(uid, b)
-        elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT:
-            data: TcpOverWebsocketMessage = message_data['data']
-            uid = data['uid']
-            name = data['name']
-            b = data['data']
-            forward_client.create_socket(name, uid, data['ip_port'])
-        elif message_data['type_'] == MessageTypeConstant.PING:
-            heart_beat_task.set_recv_heart_beat_time(time.time())
+class WebsocketClient:
+    def __init__(self, ws: websocket.WebSocketApp, tcp_forward_client, heart_beat_task, config_data: ClientConfigEntity):
+        self.ws: websocket.WebSocketApp = ws
+        self.ws.on_message = self.on_message
+        self.ws.on_close = self.on_close
+        self.ws.on_open = self.on_open
+        self.forward_client: TcpForwardClient = tcp_forward_client
+        self.heart_beat_task = heart_beat_task
+        self.config_data: ClientConfigEntity = config_data
 
-    except Exception:
-        LoggerFactory.get_logger().error(traceback.format_exc())
-    # LoggerFactory.get_logger().debug(f'on message {time_} cost time {time.time() - start_time}')
+    def on_message(self, ws, message: bytes):
+        try:
+            message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
+            start_time = time.time()
+            time_ = message_data['type_']
+            if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
+                # LoggerFactory.get_logger().debug(f'get websocket message {message_data}')
+                data: TcpOverWebsocketMessage = message_data['data']
+                uid = data['uid']
+                name = data['name']
+                b = data['data']
+                self.forward_client.create_socket(name, uid, data['ip_port'])
+                self.forward_client.send_by_uid(uid, b)
+            elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT:
+                data: TcpOverWebsocketMessage = message_data['data']
+                uid = data['uid']
+                name = data['name']
+                b = data['data']
+                self.forward_client.create_socket(name, uid, data['ip_port'])
+            elif message_data['type_'] == MessageTypeConstant.PING:
+                self.heart_beat_task.set_recv_heart_beat_time(time.time())
 
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+        # LoggerFactory.get_logger().debug(f'on message {time_} cost time {time.time() - start_time}')
 
-def on_error(ws, error):
-    LoggerFactory.get_logger().error(f'error:  {error} ')
+    def on_error(self, ws, error):
+        LoggerFactory.get_logger().error(f'error:  {error} ')
 
+    def on_close(self, ws, a, b):
+        with OPEN_CLOSE_LOCK:
+            LoggerFactory.get_logger().info(f'close, {a}, {b} ')
+            self.heart_beat_task.is_running = False
+            self.forward_client.close()
 
-def on_close(ws, a, b):
-    with OPEN_CLOSE_LOCK:
-        LoggerFactory.get_logger().info(f'close, {a}, {b} ')
-        heart_beat_task.is_running = False
-        forward_client.close()
+    def on_open(self, ws):
+        with OPEN_CLOSE_LOCK:
+            LoggerFactory.get_logger().info('open success')
+            push_client_data: List[ClientData] = self.config_data['client']
+            client_name = self.config_data.get('client_name', socket.gethostname())
+            push_configs: PushConfigEntity = {
+                'key': ContextUtils.get_password(),
+                'config_list': push_client_data,
+                "client_name": client_name
+            }
+            message: MessageEntity = {
+                'type_': MessageTypeConstant.PUSH_CONFIG,
+                'data': push_configs
+            }
+            self.heart_beat_task.set_recv_heart_beat_time(time.time())
 
-
-def on_open(ws):
-    with OPEN_CLOSE_LOCK:
-        LoggerFactory.get_logger().info('open success')
-        push_client_data: List[ClientData] = config_data['client']
-        client_name = config_data.get('client_name', socket.gethostname())
-        push_configs: PushConfigEntity = {
-            'key': ContextUtils.get_password(),
-            'config_list': push_client_data,
-            "client_name": client_name
-        }
-        message: MessageEntity = {
-            'type_': MessageTypeConstant.PUSH_CONFIG,
-            'data': push_configs
-        }
-        heart_beat_task.set_recv_heart_beat_time(time.time())
-
-        ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
-        forward_client.is_running = True
-        heart_beat_task.is_running = True
-        task = Thread(target=forward_client.start_forward)
-        task.start()
+            ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+            self.forward_client.is_running = True
+            self.heart_beat_task.is_running = True
+            task = Thread(target=self.forward_client.start_forward)
+            task.start()
 
 
 def signal_handler(sig, frame):
@@ -161,7 +166,7 @@ def run_client(ws: websocket.WebSocketApp):
         time.sleep(2)
 
 
-if __name__ == "__main__":
+def main():
     config_data = get_config()
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)
@@ -177,15 +182,15 @@ if __name__ == "__main__":
         url += 'ws://'
     url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}"
     LoggerFactory.get_logger().info(f'start open {url}')
-    ws = websocket.WebSocketApp(url,
-                                on_message=on_message,
-                                # on_error=on_error,
-                                on_close=on_close,
-                                on_open=on_open)
-    forward_client = TcpForwardClient( ws)
+    ws = websocket.WebSocketApp(url)
+    forward_client = TcpForwardClient(ws)
     heart_beat_task = HeatBeatTask(ws)
+    WebsocketClient(ws, forward_client, heart_beat_task, config_data)
     LoggerFactory.get_logger().info('start run_forever')
-    Thread(target=run_client, args=(ws, )).start()  # 为了使用tornado的ioloop 方便设置超时
+    Thread(target=run_client, args=(ws,)).start()  # 为了使用tornado的ioloop 方便设置超时
     ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
     ioloop.IOLoop.current().start()
 
+
+if __name__ == '__main__':
+    main()

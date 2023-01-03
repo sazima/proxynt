@@ -3,9 +3,10 @@ import json
 import logging
 import os.path
 import signal
-
 import sys
 from optparse import OptionParser
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import tornado.ioloop
 import tornado.web
@@ -72,7 +73,8 @@ def signal_handler(sig, frame):
     print('You pressed Ctrl+C!')
     os._exit(0)
 
-if __name__ == "__main__":
+
+def main():
     signal.signal(signal.SIGINT, signal_handler)
     server_config = load_config()
     ContextUtils.set_password(server_config['password'])
@@ -105,3 +107,7 @@ if __name__ == "__main__":
     heart_beat_task = HeartBeatTask(asyncio.get_event_loop())
     tornado.ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
     tornado.ioloop.IOLoop.current().start()
+
+
+if __name__ == '__main__':
+    main()
