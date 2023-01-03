@@ -17,22 +17,22 @@
 
 ## 使用前
 
-安装依赖
+安装
 
 ```
-pip install -r requirements.txt
+pip install https://github.com/sazima/nat_traversal/archive/pip_2023.zip
 ```
 
 ## 使用
 
 客户端
 ```
-python run_client.py -c config_c.json
+nt_client -c config_c.json
 ```
 
 服务端
 ```
-python run_server.py -c config_s.json
+nt_server -c config_s.json
 ```
 
 服务端ui
@@ -71,7 +71,7 @@ http://192.168.9.224:18888/websocketpath1/admin
 - `admin.admin_password`: 管理密码
 
 然后启动:
-`python run_server.py -c config_s.json `
+`nt_server -c config_s.json `
 
 #### 2. 在需要被访问的内网电脑上配置`config_c.json`
 
@@ -98,7 +98,7 @@ http://192.168.9.224:18888/websocketpath1/admin
 ```
 
 然后启动: 
-`python run_client.py -c config_c.json`
+`nt_client -c config_c.json`
 
 #### 3. ssh 连接: 
 ```
