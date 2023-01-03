@@ -105,8 +105,8 @@ def main():
     static_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
     template_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
     if not os.path.isdir(static_path) and  os.path.abspath(__file__).startswith(sys.prefix):
-        static_path = os.path.join(sys.prefix, SystemConstant.PACKAGE_NAME, 'server', 'template')
-        template_path = os.path.join(sys.prefix, SystemConstant.PACKAGE_NAME, 'server', 'template')
+        static_path = os.path.join(sys.prefix, 'local', SystemConstant.PACKAGE_NAME, 'server', 'template')
+        template_path = os.path.join(sys.prefix, 'local', SystemConstant.PACKAGE_NAME, 'server', 'template')
     LoggerFactory.get_logger().info(f'static_path: {static_path}')
     tcp_forward_client = TcpForwardClient.get_instance()
     handlers = [
