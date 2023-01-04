@@ -15,7 +15,7 @@ from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.server_config_entity import ServerConfigEntity
-from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler
+from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler, ShowVariableHandler
 from server.heart_beat_task import HeartBeatTask
 from server.tcp_forward_client import TcpForwardClient
 from server.websocket_handler import MyWebSocketaHandler
@@ -101,6 +101,7 @@ def main():
     websocket_path = ContextUtils.get_websocket_path()
     admin_html_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH  # 管理网页路径
     admin_api_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/api'  # 管理api路径
+    show_variable_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/show_variable'  # 管理api路径
     status_url_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/static'  # static
     static_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
     template_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
@@ -116,7 +117,7 @@ def main():
         handlers.extend([
             (admin_html_path, AdminHtmlHandler),
             (admin_api_path, AdminHttpApiHandler),
-
+            (show_variable_path, ShowVariableHandler)
         ])
     app = tornado.web.Application(handlers, static_path=static_path, static_url_prefix=status_url_path, template_path=template_path)
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
