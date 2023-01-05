@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import socket
 import time
 import traceback
@@ -42,7 +43,8 @@ class MyWebSocketaHandler(WebSocketHandler):
         start_time = time.time()
         try:
             await (super(MyWebSocketaHandler, self).write_message(bytes(message), binary))
-            LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}, len: {len(message)}')
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}, len: {len(message)}')
             return
         except Exception:
             LoggerFactory.get_logger().info(message)
@@ -63,11 +65,8 @@ class MyWebSocketaHandler(WebSocketHandler):
             start_time = time.time()
             if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
                 data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
-                # name = data['name']
                 uid = data['uid']
-                # client_name_and_config_name = (self.client_name, name)
                 await tcp_forward_client.send_to_socket(uid, data['data'])
-                # await self.client_name_and_name_to_tcp_forward_client[client_name_and_config_name].send_to_socket(uid, data['data'])
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
                     LoggerFactory.get_logger().info(f'get push config: {message_dict}')
@@ -115,7 +114,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.push_config = push_config
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.handler_to_recv_time[self] = time.time()
-            LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 

@@ -1,19 +1,18 @@
-import select
+import logging
 import socket
 import time
 import traceback
 from threading import Lock
-from typing import Dict, Tuple
+from typing import Dict
 
 from common import websocket
-from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
+from common.nat_serialization import NatSerialization
 from common.pool import SelectPool
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
-
 
 
 class TcpForwardClient:
@@ -50,7 +49,8 @@ class TcpForwardClient:
         }
         start_time = time.time()
         self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
-        LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
+        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+            LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
         if not recv:
             try:
                 self.close_connection(each)
@@ -58,28 +58,29 @@ class TcpForwardClient:
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
 
     def create_socket(self, name: str, uid: str, ip_port: str):
+        if uid in self.uid_to_socket:
+            return
         with self.lock:
-            if uid not in self.uid_to_socket:
-                try:
+            if uid in self.uid_to_socket:  # 再次判断
+                return
+            try:
+                if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-
-                    s.settimeout(5)
-                    ip, port = ip_port.split(':')
-                    s.connect((ip, int(port)))
-                    self.uid_to_socket[uid] = s  #
-                    self.uid_to_name[uid] = name
-                    self.socket_to_uid[s] = uid
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(5)
+                ip, port = ip_port.split(':')
+                s.connect((ip, int(port)))
+                self.uid_to_socket[uid] = s  #
+                self.uid_to_name[uid] = name
+                self.socket_to_uid[s] = uid
+                if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'register socket {name}, {uid}')
-                    self.socket_event_loop.register(s, self.handle_message)
+                self.socket_event_loop.register(s, self.handle_message)
+                if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'register socket success {name}, {uid}')
-                except Exception:
-                    LoggerFactory.get_logger().error(traceback.format_exc())
-                    self.close_remote_socket(uid, name)
-            else:
-                LoggerFactory.get_logger().debug(f'socket  already create')
-
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
+                self.close_remote_socket(uid, name)
 
     def close_connection(self, socket_client: socket.socket):
         LoggerFactory.get_logger().info(f'close {socket_client}')
@@ -125,10 +126,12 @@ class TcpForwardClient:
 
     def send_by_uid(self, uid, msg: bytes):
         try:
-            LoggerFactory.get_logger().debug(f'send to {uid}, {len(msg)}')
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug(f'send to {uid}, {len(msg)}')
             s = self.uid_to_socket[uid]
             s.sendall(msg)
-            LoggerFactory.get_logger().debug(f'send success to {uid}, {len(msg)}')
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug(f'send success to {uid}, {len(msg)}')
             if not msg:
                 self.close_connection(s)
         except Exception:

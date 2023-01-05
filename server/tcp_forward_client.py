@@ -1,5 +1,5 @@
 import asyncio
-import select
+import logging
 import socket
 import time
 import traceback
@@ -200,7 +200,8 @@ class TcpForwardClient:
         if not message:
             asyncio.get_event_loop().run_in_executor(None, self.close_connection, socket_client)
 
-        LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
+        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+            LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
     def close_connection(self, socket_client: socket.socket):
         # todo
