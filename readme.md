@@ -6,9 +6,9 @@
 
 ## 特性
 
-1. 支持在服务端增删端口映射
+1. 随时随地打开浏览器管理端口映射
 2. 公网服务器和内网客户端之间只建立一个 WebSocket 连接
-3. 跨平台. 工具用到的 Python 第三方库有: tornado, typing_extensions
+3. 依赖少. 工具用到的 Python 第三方库有: tornado, typing_extensions
 
 
 ## 常用场景
@@ -20,7 +20,7 @@
 安装
 
 ```
-pip install https://github.com/sazima/proxynt/archive/master.zip 
+pip install proxynt
 ```
 
 ## 使用
