@@ -73,7 +73,7 @@ config_c.json example:
   ],
   "log_file": "/var/log/nt/nt.log"
 }
-    """)
+    """, version=SystemConstant.VERSION)
     parser.add_option("-c", "--config",
                       type='str',
                       dest='config',

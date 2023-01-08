@@ -1,6 +1,6 @@
 from constant.system_constant import SystemConstant
 package_name = SystemConstant.PACKAGE_NAME
-version='0.0.5'
+version = SystemConstant.VERSION
 
 import setuptools
 l = setuptools.find_packages(where='.')
