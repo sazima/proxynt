@@ -80,7 +80,7 @@
         </el-table-column>
     </el-table>
 
-    <el-dialog title="添加内容" :visible.sync="dialogFormVisible">
+    <el-dialog title="新增配置后该客户端将重新连接" :visible.sync="dialogFormVisible">
         <el-form :model="form">
             <el-form-item label="名称" :label-width="formLabelWidth">
                 <el-input v-model="form.name" autocomplete="off"></el-input>
@@ -164,7 +164,7 @@
                     client_name: client_name,
                     name: name
                 }
-                this.$confirm('此操作将永久删除该文件, 是否继续?', '提示', {
+                this.$confirm('删除后该客户端将重新连接, 是否继续?', '提示', {
                     confirmButtonText: '确定',
                     cancelButtonText: '取消',
                     type: 'warning'
@@ -190,8 +190,15 @@
                 axios.get(url, {
                     headers: {token: localStorage.getItem('token')}
                 }).then(res=> {
-                    if (res.data.code !== 200) {
-                        return alert(res.data.msg)
+                    console.log(res)
+                    const code = res.data.code
+                    if (code !== 200) {
+                        this.$message.error(res.data.msg)
+                        if (code === 401) {
+                            setTimeout(() => {
+                                location.reload();
+                            }, 2000)
+                        }
                     }
                     this.tableData = res.data.data
                     console.log(this.tableData)

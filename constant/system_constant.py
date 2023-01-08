@@ -10,6 +10,8 @@ class SystemConstant:
 
     ENCRYPT_METHOD = 'table'
 
-
     PACKAGE_NAME = 'proxynt'
 
+    COOKIE_EXPIRE_SECONDS = 3600 * 24
+
+    VERSION = '0.0.6'

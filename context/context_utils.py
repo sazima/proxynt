@@ -7,6 +7,7 @@ c = {}
 
 
 class ContextUtils:
+    _cookie_to_time = '_cookie_to_time'
     _admin_config = '_admin_config'
     _websocket_path = '_websocket_path'
     _log_level = '_log_level'
@@ -78,3 +79,12 @@ class ContextUtils:
     @classmethod
     def set_admin_config(cls, data):
         c[cls._admin_config] = data
+
+
+    @classmethod
+    def get_cookie_to_time(cls) -> Dict[str, float]:
+        return c[cls._cookie_to_time]
+
+    @classmethod
+    def set_cookie_to_time(cls, data:  Dict[str, float]):
+        c[cls._cookie_to_time] = data

@@ -11,12 +11,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tornado.ioloop
 import tornado.web
 
+from server.task.check_cookie_task import CheckCookieTask
 from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.server_config_entity import ServerConfigEntity
 from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler, ShowVariableHandler
-from server.heart_beat_task import HeartBeatTask
+from server.task.heart_beat_task import HeartBeatTask
 from server.tcp_forward_client import TcpForwardClient
 from server.websocket_handler import MyWebSocketaHandler
 
@@ -46,7 +47,7 @@ config_s.json example:
         "admin_password": "new_password"
     }
 }
-""")
+""", version=SystemConstant.VERSION)
     parser.add_option("-c", "--config",
                       type='str',
                       dest='config',
@@ -90,6 +91,7 @@ def signal_handler(sig, frame):
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     server_config = load_config()
+    ContextUtils.set_cookie_to_time({})
     ContextUtils.set_password(server_config['password'])
     ContextUtils.set_websocket_path(server_config['path'])
     ContextUtils.set_port(int(server_config['port']))
@@ -123,7 +125,10 @@ def main():
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}, websocket_path: {websocket_path}, admin_path: {admin_html_path}')
     heart_beat_task = HeartBeatTask(asyncio.get_event_loop())
+    # create interval task
+    check_cookie_task = CheckCookieTask()
     tornado.ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
+    tornado.ioloop.PeriodicCallback(check_cookie_task.run, 3600 * 1000).start()
     tornado.ioloop.IOLoop.current().start()
 
 

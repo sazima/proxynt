@@ -1,11 +1,13 @@
 import json
+import time
 import traceback
 import uuid
-from typing import List, Set
+from typing import List, Set, Dict
 
 from tornado.web import RequestHandler, StaticFileHandler
 
 from common.logger_factory import LoggerFactory
+from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.server_config_entity import ServerConfigEntity
@@ -14,14 +16,15 @@ from server.websocket_handler import MyWebSocketaHandler
 
 # todo: 身份认证
 COOKIE_KEY = 'c'
-cookie_set = set()
 MIN_PORT = 1000
+NOT_LOGIN = 401
 
 
 class AdminHtmlHandler(RequestHandler):
     async def get(self):
         result = self.get_cookie(COOKIE_KEY)
-        if result in cookie_set:
+        cookie_dict = ContextUtils.get_cookie_to_time()
+        if result in cookie_dict and time.time()  - cookie_dict[result] < SystemConstant.COOKIE_EXPIRE_SECONDS:
             self.render('ele_index.html')
         else:
             self.render('login.html')
@@ -33,7 +36,8 @@ class AdminHtmlHandler(RequestHandler):
             admin_config = ContextUtils.get_admin_config()
             if admin_config and admin_config['admin_password'] == password:
                 uid = uuid.uuid4().hex
-                cookie_set.add(uid)
+                cookie_dict = ContextUtils.get_cookie_to_time()
+                cookie_dict[uid] =  time.time()
                 self.set_cookie(COOKIE_KEY, uid)
                 self.write({
                     'code': 200,
@@ -63,6 +67,15 @@ class ShowVariableHandler(RequestHandler):
 class AdminHttpApiHandler(RequestHandler):
     async def get(self):
         try:
+            cookie_dict = ContextUtils.get_cookie_to_time()
+            result = self.get_cookie(COOKIE_KEY)
+            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
+                self.write({
+                    'code': NOT_LOGIN,
+                    'data': '',
+                    'msg': '登录信息已经过期, 请重新刷新页面'
+                })
+                return
             online_client_name_list: List[str] = list(MyWebSocketaHandler.client_name_to_handler.keys())
             return_list = []
             client_name_to_config_list_in_server = ContextUtils.get_client_name_to_config_in_server()
@@ -106,6 +119,16 @@ class AdminHttpApiHandler(RequestHandler):
     def delete(self, *args, **kwargs):
         try:
             # request_data = json.loads(self.request.body)
+            cookie_dict = ContextUtils.get_cookie_to_time()
+            result = self.get_cookie(COOKIE_KEY)
+            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
+                self.write({
+                    'code': NOT_LOGIN,
+                    'data': '',
+                    'msg': '登录信息已经过期, 请重新刷新页面'
+                })
+                return
+            online_client_name_list: List[str] = list(MyWebSocketaHandler.client_name_to_handler.keys())
             client_name = self.get_argument('client_name')
             name = self.get_argument('name')
             LoggerFactory.get_logger().info(f'delete {client_name}, {name}')
@@ -136,6 +159,16 @@ class AdminHttpApiHandler(RequestHandler):
 
     async def post(self):
         try:
+            cookie_dict = ContextUtils.get_cookie_to_time()
+            result = self.get_cookie(COOKIE_KEY)
+            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
+                self.write({
+                    'code': NOT_LOGIN,
+                    'data': '',
+                    'msg': '登录信息已经过期, 请重新刷新页面'
+                })
+                return
+            online_client_name_list: List[str] = list(MyWebSocketaHandler.client_name_to_handler.keys())
             request_data = json.loads(self.request.body)
             LoggerFactory.get_logger().info(f'add config {request_data}')
             client_name = request_data.get('client_name')
