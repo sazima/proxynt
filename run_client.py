@@ -189,6 +189,7 @@ def run_client(ws: websocket.WebSocketApp):
 
 
 def main():
+    print('github: ', SystemConstant.GITHUB)
     config_data = get_config()
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)

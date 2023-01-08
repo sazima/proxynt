@@ -89,6 +89,7 @@ def signal_handler(sig, frame):
 
 
 def main():
+    print('github: ', SystemConstant.GITHUB)
     signal.signal(signal.SIGINT, signal_handler)
     server_config = load_config()
     ContextUtils.set_cookie_to_time({})
