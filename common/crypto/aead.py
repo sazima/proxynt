@@ -8,7 +8,7 @@
 # The code belongs to no one. Do whatever you want.
 # Forget about boring open source license.
 #
-# AEAD cipher for shadowsocks
+# AEAD cipher for *secret*
 #
 
 # from __future__ import absolute_import, division, print_function, \
@@ -124,7 +124,7 @@ def nonce_increment(nonce, nlen):
 
 class AeadCryptoBase(object):
     """
-    Handles basic aead process of shadowsocks protocol
+    Handles basic aead process of *secret* protocol
 
     TCP Chunk (after encryption, *ciphertext*)
     +--------------+---------------+--------------+------------+
