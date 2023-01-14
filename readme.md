@@ -7,17 +7,14 @@ github: https://github.com/sazima/proxynt
 ## 特性
 
 1. 随时随地打开浏览器管理端口映射
-2. 公网服务器和内网客户端之间只建立一个 WebSocket 连接
-3. 依赖少. 工具用到的 Python 第三方库有: tornado, typing_extensions
-
+2. 公网服务器和内网客户端之间使用 WebSocket 加密传输
+3. 依赖少, 使用 pip一键安装
 
 ## 常用场景
 1. 在家托管网站服务器
 2. 管理物联网设备
 
 ## 安装
-
-安装
 
 ```
 pip install proxynt
@@ -27,20 +24,27 @@ pip install proxynt
 
 客户端
 ```
+# 查看帮助
+nt_client --help
+# 启动客户端
 nt_client -c config_c.json
 ```
 
 服务端
 ```
+# 查看帮助
+nt_server --help
+# 启动服务端
 nt_server -c config_s.json
 ```
 
 服务端ui
 ```
-管理页面路径为websocket路径+admin,
+管理页面路径为websocket路径+/admin,
 比如 
-http://192.168.9.224:18888/websocketpath1/admin
+http://192.168.9.224:18888/websocketpath/admin
 ```
+
 
 ![ui](./ui.png)
 
