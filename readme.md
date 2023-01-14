@@ -86,6 +86,7 @@ http://192.168.9.224:18888/websocketpath1/admin
     "password": "helloworld",
     "path": "/websocket_path"
   },
+  "client_name": "我家里的小电脑",
   "client": [
     {
       "name": "ssh1",
@@ -96,6 +97,10 @@ http://192.168.9.224:18888/websocketpath1/admin
   ]
 }
 ```
+说明:
+- `server`: 要连接的服务器端口, ip, 是否是https, 密码, websocket路径
+- `client_name`: 客户端名称
+- `client`:  这里是将本机的22端口映射到服务器的12222端口上
 
 然后启动: 
 `nt_client -c config_c.json`
