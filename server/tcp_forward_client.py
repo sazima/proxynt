@@ -9,6 +9,7 @@ from functools import partial
 from threading import Thread, Lock
 from asyncio import Lock as AsyncioLock
 from typing import Dict, Tuple, List, Set
+import os
 
 import tornado
 
@@ -26,11 +27,11 @@ class TcpForwardClient:
 
     def __init__(self,  loop, tornado_loop):
         self.socket_event_loop =  SelectPool()
-        self.uid_to_client: Dict[str, socket.socket] = dict()
-        self.client_to_uid: Dict[socket.socket, str] = dict()
-        self.uid_to_name_ip_port : Dict[str, Tuple[str, str]]  = dict()
+        self.uid_to_client: Dict[bytes, socket.socket] = dict()
+        self.client_to_uid: Dict[socket.socket, bytes] = dict()
+        self.uid_to_name_ip_port : Dict[bytes, Tuple[str, str]]  = dict()
 
-        self.uid_to_listen_socket_server: Dict[str, socket.socket]  = dict()
+        self.uid_to_listen_socket_server: Dict[bytes, socket.socket]  = dict()
         self.listen_socket_server_to_name_ip_port: Dict[socket.socket, Tuple[str, str]]  = dict()
         self.listen_socket_server_to_handler: Dict[socket.socket, 'MyWebSocketaHandler']  = dict()
 
@@ -155,7 +156,7 @@ class TcpForwardClient:
             return
         LoggerFactory.get_logger().info(f'get connect : {address}')
         # 当前 服务端的client 也会对应服务端连接内网服务的一个 client
-        uid = uuid.uuid4().hex
+        uid = os.urandom(4)
         handler = self.listen_socket_server_to_handler[s]
 
         self.listen_socket_server_to_uid_set[s].add(uid)
@@ -167,7 +168,7 @@ class TcpForwardClient:
         Thread(target=self.request_to_connect, args=(uid, )).start()
         self.register_client(client)
 
-    def request_to_connect(self, uid: str):
+    def request_to_connect(self, uid: bytes):
         """请求连接客户端"""
         client = self.uid_to_client[uid]
         name, ip_port = self.uid_to_name_ip_port[uid]
@@ -186,7 +187,7 @@ class TcpForwardClient:
             partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True
         )
 
-    async def send_to_socket(self, uid: str, message: bytes):
+    async def send_to_socket(self, uid: bytes, message: bytes):
         send_start_time = time.time()
         if uid not in self.uid_to_client:
             LoggerFactory.get_logger().debug(f'{message}, {uid} not in ')

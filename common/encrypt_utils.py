@@ -1,18 +1,16 @@
-from common.cryptor import Cryptor
-from constant.system_constant import SystemConstant
-
+from common.crypto.table import TableCipher
 
 class EncryptUtils:
 
     @classmethod
     def encrypt(cls, cleartext: bytes, key: str):
-        c = Cryptor(key.encode(), SystemConstant.ENCRYPT_METHOD)
-        return c.encrypt(cleartext)
+        cipher = TableCipher(key.encode(), 1)
+        return cipher.encrypt(cleartext)
 
     @classmethod
     def decrypt(cls, cipher: bytes, key) -> bytes:
-        c = Cryptor(key.encode(), SystemConstant.ENCRYPT_METHOD)
-        return c.decrypt(cipher)
+        decipher = TableCipher(key.encode(), 0)
+        return decipher.decrypt(cipher)
 
 
 

@@ -17,10 +17,10 @@ from entity.message.message_entity import MessageEntity
 
 class TcpForwardClient:
     def __init__(self, ws: websocket):
-        self.uid_to_socket: Dict[str, socket.socket] = dict()
-        self.socket_to_uid: Dict[socket.socket, str] = dict()
+        self.uid_to_socket: Dict[bytes, socket.socket] = dict()
+        self.socket_to_uid: Dict[socket.socket, bytes] = dict()
         # self.name_to_addr: Dict[str, Tuple[str, int]] = name_to_addr
-        self.uid_to_name: Dict[str, str] = dict()
+        self.uid_to_name: Dict[bytes, str] = dict()
         self.is_running = True
         self.ws = ws
         self.lock = Lock()
@@ -57,7 +57,7 @@ class TcpForwardClient:
             except Exception:
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
 
-    def create_socket(self, name: str, uid: str, ip_port: str):
+    def create_socket(self, name: str, uid: bytes, ip_port: str):
         if uid in self.uid_to_socket:
             return
         with self.lock:
@@ -108,7 +108,7 @@ class TcpForwardClient:
             self.uid_to_name.clear()
             self.is_running = False
 
-    def close_remote_socket(self, uid: str, name: str = None):
+    def close_remote_socket(self, uid: bytes, name: str = None):
         if name is None:
             name = self.uid_to_name.get(uid, '')
         send_message: MessageEntity = {

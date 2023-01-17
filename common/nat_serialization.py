@@ -1,4 +1,5 @@
 import json
+import os
 import struct
 
 from common.encrypt_utils import EncryptUtils
@@ -7,6 +8,7 @@ from entity.message.message_entity import MessageEntity
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 
 
+LEN_UID = 4
 # todo 加 nonce 和 timestmap
 class NatSerialization:
     """
@@ -17,20 +19,17 @@ class NatSerialization:
 
     # 报文形式: 类型, 数据
     @classmethod
-    def dumps(cls, data: MessageEntity, key: str) -> bytes:
+    def dumps(cls, data: MessageEntity, key: str, encrypt_data: bool = True) -> bytes:
         type_ = data['type_']
         if type_ in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
             data_content: TcpOverWebsocketMessage = data['data']
-            uid = data_content['uid']  # 长度32
+            uid = data_content['uid']  # 长度r
             name = data_content['name']
             bytes_ = data_content['data']
             ip_port = data_content['ip_port']
             # I是uint32, 占4个字节, unsigned __int32	0 到 4,294,967,295;  uid是固定32
-            # len: name: char 长度1
-            # len: ip_port: char 长度1
-            # len: bytess: uint32 长度4
             # b = type_.encode() + struct.pack(f'BBI32s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_),  uid.encode(), name.encode(),  ip_port.encode(), bytes_)
-            b_data = struct.pack(f'BBI32s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_),  uid.encode(), name.encode(),  ip_port.encode(), bytes_)
+            b_data = struct.pack(f'BBI{LEN_UID}s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_),  uid, name.encode(),  ip_port.encode(), bytes_)
 
         elif type_ == MessageTypeConstant.PUSH_CONFIG:
             # b = type_.encode() + json.dumps(data).encode()
@@ -54,9 +53,9 @@ class NatSerialization:
         if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
             # I是uint32, 占4个字节, unsigned __int32	0 到 4,294,967,295;  uid是固定32
             len_name, len_ip_port, len_bytes = struct.unpack('BBI', byte_data[5:13])
-            uid, name, ip_port,  socket_dta = struct.unpack(f'32s{len_name}s{len_ip_port}s{len_bytes}s', byte_data[13:])
+            uid, name, ip_port,  socket_dta = struct.unpack(f'4s{len_name}s{len_ip_port}s{len_bytes}s', byte_data[13:])
             data: TcpOverWebsocketMessage = {
-                'uid': uid.decode(),
+                'uid': uid,
                 'name': name.decode(),
                 'ip_port': ip_port.decode(),
                 'data': socket_dta
@@ -89,7 +88,7 @@ if __name__ == '__main__':
     data = {'type_': '5',
             'data': {'name': 'ssh',
                      'data': b'SSH-2.0-OpenSSH_7.8\r\n' ,
-                     'uid': 'e18fe62fa05f446db95236c9826bfdd6 ',
+                     'uid': os.urandom(4),
                      'ip_port': '127.0.0.1:8888'}}
     key32 = 'xxxx'
     # salt = '!%F=-?Pst970'
