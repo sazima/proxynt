@@ -16,6 +16,7 @@ class ContextUtils:
     _log_path = '_log_path'
     _config_file_path = '_config_file_path'
     _client_name_to_config_in_server = '_client_name_to_config_in_server'
+    _nonce_to_timestamp = '_nonce_to_timestamp'
 
     @classmethod
     def get_password(cls) -> str:
@@ -88,3 +89,11 @@ class ContextUtils:
     @classmethod
     def set_cookie_to_time(cls, data:  Dict[str, float]):
         c[cls._cookie_to_time] = data
+
+    @classmethod
+    def get_nonce_to_time(cls) -> Dict[bytes, int]:
+        return c[cls._nonce_to_timestamp]
+
+    @classmethod
+    def set_nonce_to_time(cls, data:  Dict[bytes, int]):
+        c[cls._nonce_to_timestamp] = data

@@ -6,6 +6,8 @@ import signal
 import sys
 from optparse import OptionParser
 
+from server.task.clear_nonce_task import ClearNonceTask
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import tornado.ioloop
@@ -93,6 +95,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     server_config = load_config()
     ContextUtils.set_cookie_to_time({})
+    ContextUtils.set_nonce_to_time({})
     ContextUtils.set_password(server_config['password'])
     ContextUtils.set_websocket_path(server_config['path'])
     ContextUtils.set_port(int(server_config['port']))
@@ -130,6 +133,8 @@ def main():
     check_cookie_task = CheckCookieTask()
     tornado.ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
     tornado.ioloop.PeriodicCallback(check_cookie_task.run, 3600 * 1000).start()
+    clear_nonce_stak = ClearNonceTask()
+    tornado.ioloop.PeriodicCallback(clear_nonce_stak.run, 1800 * 1000).start()
     tornado.ioloop.IOLoop.current().start()
 
 

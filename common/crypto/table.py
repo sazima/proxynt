@@ -55,19 +55,23 @@ def init_table(key):
 
 
 class TableCipher(object):
-    def __init__(self,  key,  op):
+    def __init__(self,  key):
         self._encrypt_table, self._decrypt_table = init_table(key)
-        self._op = op
-        self.encrypt = self.update
-        self.decrypt = self.update
-        self.encrypt_once = self.update
-        self.decrypt_once = self.update
+        # self.encrypt = self.update
+        # self.decrypt = self.update
+        # self.encrypt_once = self.update
+        # self.decrypt_once = self.update
 
-    def update(self, data):
-        if self._op:
-            return translate(data, self._encrypt_table)
-        else:
-            return translate(data, self._decrypt_table)
+    def encrypt(self, data):
+        return translate(data, self._encrypt_table)
+
+    def decrypt(self, data):
+        return translate(data, self._decrypt_table)
+
+    # def update(self, data):
+    #     if self._op:
+    #         return translate(data, self._encrypt_table)
+    #     else:
 
 
 ciphers = {

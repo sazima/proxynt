@@ -10,6 +10,9 @@ import traceback
 from optparse import OptionParser
 from threading import Thread
 from typing import List, Set
+
+from client.clear_nonce_task import ClearNonceTask
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from tornado import ioloop
@@ -152,25 +155,28 @@ class WebsocketClient:
 
     def on_open(self, ws):
         with OPEN_CLOSE_LOCK:
-            LoggerFactory.get_logger().info('open success')
-            push_client_data: List[ClientData] = self.config_data['client']
-            client_name = self.config_data.get('client_name', socket.gethostname())
-            push_configs: PushConfigEntity = {
-                'key': ContextUtils.get_password(),
-                'config_list': push_client_data,
-                "client_name": client_name
-            }
-            message: MessageEntity = {
-                'type_': MessageTypeConstant.PUSH_CONFIG,
-                'data': push_configs
-            }
-            self.heart_beat_task.set_recv_heart_beat_time(time.time())
+            try:
+                LoggerFactory.get_logger().info('open success')
+                push_client_data: List[ClientData] = self.config_data['client']
+                client_name = self.config_data.get('client_name', socket.gethostname())
+                push_configs: PushConfigEntity = {
+                    'key': ContextUtils.get_password(),
+                    'config_list': push_client_data,
+                    "client_name": client_name
+                }
+                message: MessageEntity = {
+                    'type_': MessageTypeConstant.PUSH_CONFIG,
+                    'data': push_configs
+                }
+                self.heart_beat_task.set_recv_heart_beat_time(time.time())
 
-            ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
-            self.forward_client.is_running = True
-            self.heart_beat_task.is_running = True
-            task = Thread(target=self.forward_client.start_forward)
-            task.start()
+                ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+                self.forward_client.is_running = True
+                self.heart_beat_task.is_running = True
+                task = Thread(target=self.forward_client.start_forward)
+                task.start()
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
 
 
 def signal_handler(sig, frame):
@@ -198,6 +204,7 @@ def main():
         raise Exception('密码不能为空, password is required')
     log_path = config_data.get('log_file')
     ContextUtils.set_log_file(log_path)
+    ContextUtils.set_nonce_to_time({})
     url = ''
     if server_config['https']:
         url += 'wss://'
@@ -212,6 +219,8 @@ def main():
     LoggerFactory.get_logger().info('start run_forever')
     Thread(target=run_client, args=(ws,)).start()  # 为了使用tornado的ioloop 方便设置超时
     ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
+    clear_nonce_stak = ClearNonceTask()
+    ioloop.PeriodicCallback(clear_nonce_stak.run, 1800 * 1000).start()
     ioloop.IOLoop.current().start()
 
 

@@ -1,0 +1,2 @@
+class SignatureError(Exception):
+    pass

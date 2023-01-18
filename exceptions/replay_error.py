@@ -1,0 +1,2 @@
+class ReplayError(Exception):
+    pass
