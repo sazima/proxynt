@@ -112,6 +112,7 @@ class NatSerialization:
 
 if __name__ == '__main__':
 
+    ContextUtils.set_nonce_to_time({})
     def _print_commend(msg):
         print(''.join("b'{}'".format(''.join('\\x{:02x}'.format(b) for b in msg))))
 
