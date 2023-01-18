@@ -13,15 +13,16 @@ from exceptions.replay_error import ReplayError
 from exceptions.signature_error import SignatureError
 
 UID_LEN = 4
-HEADER_LEN = 30
+HEADER_LEN = 38
+EMPTY = bytes([0 for x in range(8)])
 
 
 class NatSerialization:
     """
         header + body
 
-        header (30 字节):
-        类型(1字节) | 长度(4字节) | 随机字符串(5字节) | 时间戳(4字节) | 签名 (16 字节)
+        header (38 字节):
+        类型(1字节) | body长度(4字节) | 随机字符串(5字节) | 时间戳(4字节) | 签名 (16 字节) | 空白(8字节)
         body (长度不固定):
         实际数据
 
@@ -48,8 +49,8 @@ class NatSerialization:
         b_data_len = len(b_data)
         nonce = os.urandom(5)
         timestamp = struct.pack('I', int(time.time()))
-        signature = EncryptUtils.md5_hash(nonce + timestamp + b_data[:12] + key.encode())  # len: 16
-        header = type_.encode() + struct.pack('I', b_data_len) + nonce + timestamp + signature
+        signature = EncryptUtils.md5_hash(nonce + timestamp + b_data[:12] + key.encode())
+        header = type_.encode() + struct.pack('I', b_data_len) + nonce + timestamp + signature + EMPTY
         b =  header + b_data
         return EncryptUtils.encrypt(b, key)
 
