@@ -11,12 +11,12 @@ from optparse import OptionParser
 from threading import Thread
 from typing import List, Set
 
-from client.clear_nonce_task import ClearNonceTask
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from tornado import ioloop
 
+from client.clear_nonce_task import ClearNonceTask
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
 from common import websocket

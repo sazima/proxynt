@@ -6,13 +6,13 @@ import signal
 import sys
 from optparse import OptionParser
 
-from server.task.clear_nonce_task import ClearNonceTask
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import tornado.ioloop
 import tornado.web
 
+from server.task.clear_nonce_task import ClearNonceTask
 from server.task.check_cookie_task import CheckCookieTask
 from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
