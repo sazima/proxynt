@@ -1,8 +1,6 @@
 from common.crypto.table import TableCipher
 import hashlib
 
-key_to_key16 = {
-}
 class EncryptUtils:
 
     @classmethod
