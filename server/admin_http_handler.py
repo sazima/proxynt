@@ -1,10 +1,11 @@
+import base64
 import json
+import os
 import time
 import traceback
-import uuid
-from typing import List, Set, Dict
+from typing import List, Set
 
-from tornado.web import RequestHandler, StaticFileHandler
+from tornado.web import RequestHandler
 
 from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
@@ -24,7 +25,7 @@ class AdminHtmlHandler(RequestHandler):
     async def get(self):
         result = self.get_cookie(COOKIE_KEY)
         cookie_dict = ContextUtils.get_cookie_to_time()
-        if result in cookie_dict and time.time()  - cookie_dict[result] < SystemConstant.COOKIE_EXPIRE_SECONDS:
+        if result in cookie_dict and time.time() - cookie_dict[result] < SystemConstant.COOKIE_EXPIRE_SECONDS:
             self.render('ele_index.html')
         else:
             self.render('login.html')
@@ -35,10 +36,10 @@ class AdminHtmlHandler(RequestHandler):
             password = body_data['password']
             admin_config = ContextUtils.get_admin_config()
             if admin_config and admin_config['admin_password'] == password:
-                uid = uuid.uuid4().hex
+                cookie_value = base64.b64encode(os.urandom(64)).decode()
                 cookie_dict = ContextUtils.get_cookie_to_time()
-                cookie_dict[uid] =  time.time()
-                self.set_cookie(COOKIE_KEY, uid)
+                cookie_dict[cookie_value] = time.time()
+                self.set_cookie(COOKIE_KEY, cookie_value)
                 self.write({
                     'code': 200,
                     'data': '',
