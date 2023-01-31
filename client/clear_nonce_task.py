@@ -11,6 +11,6 @@ class ClearNonceTask:
         copy_cookie_dict = copy.deepcopy(nonce_to_time)
         now = time.time()
         for n, t in copy_cookie_dict.items():
-            if (now - t) > SystemConstant.MAX_TIME_DIFFERENCE:
+            if abs(now - t) > SystemConstant.MAX_TIME_DIFFERENCE:
                 if n in nonce_to_time:
                     nonce_to_time.pop(n)
