@@ -38,20 +38,20 @@ class NatSerialization:
             name = data_content['name']
             bytes_ = data_content['data']
             ip_port = data_content['ip_port']
-            b_data = struct.pack(f'BBI{UID_LEN}s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_), uid, name.encode(), ip_port.encode(), bytes_)
+            body = struct.pack(f'BBI{UID_LEN}s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_), uid, name.encode(), ip_port.encode(), bytes_)
 
         elif type_ == MessageTypeConstant.PUSH_CONFIG:
-            b_data =  json.dumps(data).encode()
+            body =  json.dumps(data).encode()
         elif type_ == MessageTypeConstant.PING:
-            b_data =  b''
+            body =  b''
         else:
-            b_data =  b'error'
-        b_data_len = len(b_data)
+            body =  b'error'
+        body_len = len(body)
         nonce = os.urandom(5)
         timestamp = struct.pack('I', int(time.time()))
-        signature = EncryptUtils.md5_hash(nonce + timestamp + b_data[:12] + key.encode())
-        header = type_.encode() + struct.pack('I', b_data_len) + nonce + timestamp + signature + EMPTY
-        b =  header + b_data
+        signature = EncryptUtils.md5_hash(nonce + timestamp + body[:12] + key.encode())
+        header = type_.encode() + struct.pack('I', body_len) + nonce + timestamp + signature + EMPTY
+        b =  header + body
         return EncryptUtils.encrypt(b, key)
 
     @classmethod
@@ -64,7 +64,6 @@ class NatSerialization:
 
     @classmethod
     def check_nonce_and_timestamp(cls, clear_text: bytes) -> bool:
-        return True
         nonce = clear_text[5:10]
         timestamp = struct.unpack('I', clear_text[10:14])[0]
         nonce_to_time = ContextUtils.get_nonce_to_time()
@@ -79,13 +78,13 @@ class NatSerialization:
     def loads(cls, byte_data: bytes, key: str) -> MessageEntity:
         byte_data = EncryptUtils.decrypt(byte_data, key)
         type_ = byte_data[0:1]
-        data_len = struct.unpack('I', byte_data[1:5])[0]
+        body_len = struct.unpack('I', byte_data[1:5])[0]
         header = byte_data[:HEADER_LEN]
         if not cls.check_nonce_and_timestamp(byte_data):
             raise ReplayError()
-        if not cls.check_signature(byte_data, data_len, key):
+        if not cls.check_signature(byte_data, body_len, key):
             raise SignatureError()
-        body = byte_data[HEADER_LEN: data_len + HEADER_LEN]
+        body = byte_data[HEADER_LEN: body_len + HEADER_LEN]
         if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
             len_name, len_ip_port, len_bytes = struct.unpack('BBI', body[:8])
             uid, name, ip_port,  socket_dta = struct.unpack(f'4s{len_name}s{len_ip_port}s{len_bytes}s', body[8:])
