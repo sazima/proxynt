@@ -72,7 +72,7 @@ class NatSerialization:
             return False
         # if nonce in nonce_to_time or time.time() - timestamp > SystemConstant.MAX_TIME_DIFFERENCE: # 因为物联网设备的时间不一定准 所以先不校验
         #     return False
-        nonce_to_time[nonce] = timestamp
+        nonce_to_time[nonce] = int(time.time())
         return True
 
     @classmethod
