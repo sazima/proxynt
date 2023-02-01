@@ -65,7 +65,7 @@
                 filter-placement="bottom-end">
             <template slot-scope="scope">
                 <el-tag
-                        :type="scope.row.tag === 'offline' ? 'primary' : 'success'"
+                        :type="scope.row.status === 'offline' ? 'danger' : 'success'"
                         disable-transitions>{[scope.row.status]}</el-tag>
             </template>
         </el-table-column>
