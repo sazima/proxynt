@@ -2,7 +2,8 @@
 github: https://github.com/sazima/proxynt
 
 ## 原理
-![原理](./image.png)
+
+![原理](https://i.imgtg.com/2023/02/08/cqhoI.png)
 
 ## 特性
 
@@ -47,7 +48,7 @@ http://192.168.9.224:18888/websocketpath/admin
 ```
 
 
-![ui](./ui.png)
+![ui](https://i.imgtg.com/2023/02/08/cqirD.png)
 
 ## 示例, 通过 SSH 访问内网机器
 
@@ -167,3 +168,6 @@ http://192.168.9.224:18888/websocketpath/admin
     }
 }
 ```
+
+## 更新记录
+- 1.1.5: 修复客户端 WebSocketException: socket is already opened
