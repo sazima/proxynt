@@ -11,6 +11,7 @@ from optparse import OptionParser
 from threading import Thread
 from typing import List, Set
 
+from common.websocket import WebSocketException
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -188,6 +189,9 @@ def run_client(ws: websocket.WebSocketApp):
     while True:
         try:
             ws.run_forever()  # Set dispatcher to automatic reconnection
+        except WebSocketException as e:
+            LoggerFactory.get_logger().warn('WebSocketException: {}'.format(e))
+            time.sleep(5)
         except Exception as e:
             raise
         LoggerFactory.get_logger().info(f'try after 2 seconds')
