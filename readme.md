@@ -170,4 +170,4 @@ http://192.168.9.224:18888/websocketpath/admin
 ```
 
 ## 更新记录
-- 1.1.5: 修复客户端 WebSocketException: socket is already opened
+- 1.1.6: 修复客户端 WebSocketException: socket is already opened

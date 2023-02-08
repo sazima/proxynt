@@ -11,10 +11,10 @@ from optparse import OptionParser
 from threading import Thread
 from typing import List, Set
 
-from common.websocket import WebSocketException
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from common.websocket import WebSocketException
 from tornado import ioloop
 
 from client.clear_nonce_task import ClearNonceTask
