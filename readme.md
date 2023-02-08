@@ -1,6 +1,6 @@
 # 内网穿透工具
-github: https://github.com/sazima/proxynt
-
+- github: https://github.com/sazima/proxynt
+- gitee: https://gitee.com/sazima1/proxynt
 ## 原理
 
 ![原理](https://i.imgtg.com/2023/02/08/cqhoI.png)
