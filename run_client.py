@@ -193,7 +193,9 @@ def run_client(ws: websocket.WebSocketApp):
             LoggerFactory.get_logger().warn('WebSocketException: {}'.format(e))
             time.sleep(5)
         except Exception as e:
-            raise
+            LoggerFactory.get_logger().error(traceback.format_exc())
+            time.sleep(5)
+            continue
         LoggerFactory.get_logger().info(f'try after 2 seconds')
         time.sleep(2)
 
