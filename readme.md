@@ -40,11 +40,11 @@ nt_server --help
 nt_server -c config_s.json
 ```
 
-服务端ui
+启动服务端之后打开浏览器访问管理页:
 ```
 管理页面路径为websocket路径+/admin,
 比如 
-http://192.168.9.224:18888/websocketpath/admin
+http://192.168.9.224:18888/websocket_path/admin
 ```
 
 
@@ -123,7 +123,7 @@ ssh -oPort=12222 test@192.168.9.224
 http://192.168.9.224:18888/websocketpath/admin
 ```
 
-## 完整配置说明
+## 完整配置说明(使用请删除注释)
 
 - 客户端 config_c.json
 ```json5
