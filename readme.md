@@ -92,7 +92,7 @@ http://192.168.9.224:18888/websocket_path/admin
     "password": "helloworld",
     "path": "/websocket_path"
   },
-  "client_name": "我家里的小电脑",
+  "client_name": "home_pc",
   "client": [
     {
       "name": "ssh1",
