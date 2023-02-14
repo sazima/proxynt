@@ -72,7 +72,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                     LoggerFactory.get_logger().info(f'get push config: {message_dict}')
                     push_config: PushConfigEntity = message_dict['data']
                     client_name = push_config['client_name']
-                    self.client_name = client_name
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
                     if client_name in self.client_name_to_handler:
                         self.close(None, 'DuplicatedClientName')  # 与服务器上配置的名字重复
@@ -97,6 +96,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                             self.close(None, 'DuplicatedName')
                             raise DuplicatedName()
                         name_set.add(d['name'])
+                    self.client_name = client_name
                     self.names = name_set
                     listen_socket_list = []
                     for d in data:
