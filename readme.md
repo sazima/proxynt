@@ -1,3 +1,6 @@
+
+[English](./readme_en.md)
+
 # 内网穿透工具
 - github: https://github.com/sazima/proxynt
 - gitee: https://gitee.com/sazima1/proxynt

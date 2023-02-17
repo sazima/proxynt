@@ -1,5 +1,7 @@
 # 
 
+[中文](./readme.md)
+
 ProxyNT is a reverse proxy server that can expose a local server to the internet through NATs and firewalls
 ## Principle
 
