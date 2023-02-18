@@ -173,4 +173,5 @@ http://192.168.9.224:18888/websocketpath/admin
 ```
 
 ## 更新记录
+- 1.1.7: 修复服务端处理重复client_name
 - 1.1.6: 修复客户端 WebSocketException: socket is already opened

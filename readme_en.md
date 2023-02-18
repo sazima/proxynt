@@ -43,8 +43,7 @@ nt_server -c config_s.json
 ```
 After starting the server, open the management page in a browser:
 ```bash
-Copy code
-The management page URL is the WebSocket path plus /admin,
+The management page URL is the WebSocket path + /admin,
 for example:
 http://192.168.9.224:18888/websocket_path/admin
 ```
@@ -183,6 +182,7 @@ http://192.168.9.224:18888/websocketpath/admin
 ```
 ## Update history
 
+- 1.1.7: Fixed duplicate client_name
 - 1.1.6: Fixed client WebSocketException: socket is already opened.
 
 

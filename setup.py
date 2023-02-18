@@ -6,8 +6,9 @@ import setuptools
 l = setuptools.find_packages(where='.')
 l = [package_name + '.'+ x for x in l]
 l.append(package_name)
-with open("readme.md", "r", encoding="utf8") as f:
+with open("readme_en.md", "r", encoding="utf8") as f:
     readme = f.read()
+readme = readme.replace('./readme.md', 'https://github.com/sazima/proxynt/blob/master/readme.md')
 
 setuptools.setup(
 
