@@ -4,52 +4,45 @@
 <div id="app">
     <el-table
             :data="tableData"
-            stripe
+            medium="medium"
             row-key="client_name"
-            style="width: 100%">
-        <el-table-column type="expand" >
-            <template slot-scope="props" >
-                <el-form label-position="left" inline class="demo-table-expand">
-                    <el-table
-                            :data="props.row.config_list"
-                            stripe
-                            style="width: 100%">
-                        <el-table-column
-                                prop="name"
-                                label="名称"
-                                width="180">
-                        </el-table-column>
-                        <el-table-column
-                                prop="remote_port"
-                                label="远程端口"
-                                width="180">
-                        </el-table-column>
-                        <el-table-column
-                                prop="local_ip"
-                                label="本地ip"
-                                width="180">
-                        </el-table-column>
-                        <el-table-column
-                                prop="local_port"
-                                label="本地端口"
-                                width="180">
-                        </el-table-column>
-                        <el-table-column label="操作">
+            style="width: 90%; margin: 0 auto">
+        <el-table-column type="expand">
+            <template slot-scope="props">
+                <el-table
+                        :data="props.row.config_list"
+                        stripe>
+                    <el-table-column
+                            prop="name"
+                            label="名称"
+                            width="180">
+                    </el-table-column>
+                    <el-table-column
+                            prop="remote_port"
+                            label="远程端口"
+                            width="180">
+                    </el-table-column>
+                    <el-table-column
+                            prop="local_ip"
+                            label="本地ip"
+                            width="180">
+                    </el-table-column>
+                    <el-table-column
+                            prop="local_port"
+                            label="本地端口"
+                            width="180">
+                    </el-table-column>
+                    <el-table-column label="操作" width="100">
 
-                            <template slot-scope="scope">
+                        <template slot-scope="scope">
 
-
-
-                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
-                                        size="mini"
-                                        @click="handleDelete(props.row.client_name, scope.row.name)">删除 </el-button>
-                            </template>
-                        </el-table-column>
-                    </el-table>
-<!--                    <el-form-item label="配置">-->
-<!--                        <span>{[ props.row.config_list ]}</span>-->
-<!--                    </el-form-item>-->
-                </el-form>
+                            <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
+                                       size="mini"
+                                       @click="handleDelete(props.row.client_name, scope.row.name)">删除
+                            </el-button>
+                        </template>
+                    </el-table-column>
+                </el-table>
             </template>
         </el-table-column>
         <el-table-column
@@ -58,24 +51,28 @@
         >
         </el-table-column>
         <el-table-column
+                prop="version"
+                label="版本"
+        >
+        </el-table-column>
+        <el-table-column
                 prop="status"
                 label="状态"
-                width="100"
                 :filters="[{ text: 'online', value: 'online' }, { text: 'offline', value: 'offline' }]"
                 filter-placement="bottom-end">
             <template slot-scope="scope">
                 <el-tag
                         :type="scope.row.status === 'offline' ? 'danger' : 'success'"
-                        disable-transitions>{[scope.row.status]}</el-tag>
+                        disable-transitions>{[scope.row.status]}
+                </el-tag>
             </template>
         </el-table-column>
-
-
         <el-table-column label="操作">
             <template slot-scope="scope">
                 <el-button
                         size="mini"
-                        @click="handleAdd(scope.row)">新增配置</el-button>
+                        @click="handleAdd(scope.row)">新增配置
+                </el-button>
             </template>
         </el-table-column>
     </el-table>
@@ -86,14 +83,14 @@
                 <el-input v-model="form.name" autocomplete="off"></el-input>
             </el-form-item>
             <el-form-item label="远程端口" :label-width="formLabelWidth">
-                <el-input v-model="form.remote_port"  type='number' autocomplete="off"></el-input>
+                <el-input v-model="form.remote_port" type='number' autocomplete="off"></el-input>
             </el-form-item>
 
             <el-form-item label="本地ip" :label-width="formLabelWidth">
                 <el-input v-model="form.local_ip" autocomplete="off"></el-input>
             </el-form-item>
             <el-form-item label="本地端口" :label-width="formLabelWidth">
-                <el-input v-model="form.local_port"  type='number' autocomplete="off"></el-input>
+                <el-input v-model="form.local_port" type='number' autocomplete="off"></el-input>
             </el-form-item>
         </el-form>
         <div slot="footer" class="dialog-footer">
@@ -105,7 +102,7 @@
 <script>
     new Vue({
         el: '#app',
-        delimiters: ['{[', ']}']   , // 这句可以指定 {[ ]} 为插值表达式的新符号
+        delimiters: ['{[', ']}'], // 这句可以指定 {[ ]} 为插值表达式的新符号
         data() {
             return {
                 tableData: [{client_name: 'ssh'}],
@@ -140,14 +137,14 @@
                 }
                 this.form.client_name = row.client_name
                 console.log(row);
-                this.dialogFormVisible  = true
+                this.dialogFormVisible = true
             },
             submitAdd() {
                 // const url = window.location.href + '/api'
                 var url = window.location.href.split('?')[0] + '/api'
 
                 console.log(this.form)
-                axios.post(url, this.form ).then(res=> {
+                axios.post(url, this.form).then(res => {
                     if (res.data.code !== 200) {
                         return alert(res.data.msg)
                     }
@@ -158,7 +155,7 @@
                     alert('服务器出现错误')
                 })
             },
-            handleDelete(client_name, name){
+            handleDelete(client_name, name) {
                 var url = window.location.href.split('?')[0] + '/api'
                 const params = {
                     client_name: client_name,
@@ -171,7 +168,7 @@
                 }).then(() => {
                     axios.delete(url, {
                         params: params
-                    } ).then(res=> {
+                    }).then(res => {
                         if (res.data.code !== 200) {
                             return alert(res.data.msg)
                         }
@@ -189,7 +186,7 @@
                 var url = window.location.href.split('?')[0] + '/api'
                 axios.get(url, {
                     headers: {token: localStorage.getItem('token')}
-                }).then(res=> {
+                }).then(res => {
                     console.log(res)
                     const code = res.data.code
                     if (code !== 200) {

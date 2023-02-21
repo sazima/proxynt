@@ -163,7 +163,8 @@ class WebsocketClient:
                 push_configs: PushConfigEntity = {
                     'key': ContextUtils.get_password(),
                     'config_list': push_client_data,
-                    "client_name": client_name
+                    "client_name": client_name,
+                    'version': SystemConstant.VERSION
                 }
                 message: MessageEntity = {
                     'type_': MessageTypeConstant.PUSH_CONFIG,

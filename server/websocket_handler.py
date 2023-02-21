@@ -26,17 +26,17 @@ from server.tcp_forward_client import TcpForwardClient
 
 class MyWebSocketaHandler(WebSocketHandler):
     client_name: str
+    version: str
     push_config: PushConfigEntity
     names: Set[str]
 
-    # client_name_and_name_to_tcp_forward_client: Dict[Tuple[str, str], TcpForwardClient] = {}  # {客户端名称, 配置名称: 转发客户端}
-    # handler_to_names: Dict['MyWebSocketaHandler', Set[str]] = defaultdict(set)
     handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock = Lock()
 
     def open(self, *args: str, **kwargs: str):
         self.client_name = None
+        self.version = None
         LoggerFactory.get_logger().info('new open websocket')
 
     async def write_message(self, message, binary=False):
@@ -72,6 +72,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     LoggerFactory.get_logger().info(f'get push config: {message_dict}')
                     push_config: PushConfigEntity = message_dict['data']
                     client_name = push_config['client_name']
+                    self.version = push_config.get('version')
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
                     if client_name in self.client_name_to_handler:
                         self.close(None, 'DuplicatedClientName')  # 与服务器上配置的名字重复

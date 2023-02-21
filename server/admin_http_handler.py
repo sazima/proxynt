@@ -94,6 +94,7 @@ class AdminHttpApiHandler(RequestHandler):
                     'client_name': client_name,
                     'config_list': config_list,
                     'status': 'online',
+                    'version': handler.version,
                     'can_delete_names': [x['name'] for x in client_name_to_config_list_in_server.get(client_name, [])]
                     # 配置在服务器上的, 可以删除
                 })
@@ -105,6 +106,7 @@ class AdminHttpApiHandler(RequestHandler):
                 return_list.append({
                     'client_name': client_name,
                     'config_list': config_list,
+                    'version': '',
                     'status': 'offline',
                     'can_delete_names': [x['name'] for x in client_name_to_config_list_in_server.get(client_name, [])]
                 })
