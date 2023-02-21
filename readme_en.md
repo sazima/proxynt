@@ -22,7 +22,7 @@ ProxyNT is a reverse proxy server that can expose a local server to the internet
 ## Installation
 
 ```bash
-pip install proxynt
+pip install -U proxynt
 ```
 
 
@@ -182,6 +182,7 @@ http://192.168.9.224:18888/websocketpath/admin
 ```
 ## Update history
 
+- 1.1.8: Display client version
 - 1.1.7: Fixed duplicate client_name
 - 1.1.6: Fixed client WebSocketException: socket is already opened.
 
