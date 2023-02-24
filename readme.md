@@ -171,6 +171,10 @@ http://192.168.9.224:18888/websocketpath/admin
     }
 }
 ```
+## 趋势
+
+[![Stargazers over time](https://starchart.cc/sazima/proxynt.svg)](https://starchart.cc/sazima/proxynt)
+
 
 ## 更新记录
 - 1.1.8: 管理页显示客户端版本

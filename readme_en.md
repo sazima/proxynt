@@ -180,6 +180,14 @@ http://192.168.9.224:18888/websocketpath/admin
 }
 
 ```
+
+
+
+## Stargazers over time
+
+[![Stargazers over time](https://starchart.cc/sazima/proxynt.svg)](https://starchart.cc/sazima/proxynt)
+
+
 ## Update history
 
 - 1.1.8: Display client version
