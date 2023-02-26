@@ -4,6 +4,7 @@
 # 内网穿透工具
 - github: https://github.com/sazima/proxynt
 - gitee: https://gitee.com/sazima1/proxynt
+
 ## 原理
 
 ![原理](https://i.imgtg.com/2023/02/08/cqhoI.png)
@@ -25,36 +26,13 @@
 pip install -U proxynt
 ```
 
-## 使用
-
-客户端
-```
-# 查看帮助
-nt_client --help
-# 启动客户端
-nt_client -c config_c.json
-```
-
-服务端
-```
-# 查看帮助
-nt_server --help
-# 启动服务端
-nt_server -c config_s.json
-```
-
-启动服务端之后打开浏览器访问管理页:
-
-管理页面路径为 **websocket路径+/admin** 比如 `http://192.168.9.224:18888/websocket_path/admin`
-
-![V5zWL.md.png](https://i.imgtg.com/2023/02/26/V5zWL.md.png)
-
-## 示例, 通过 SSH 访问内网机器
+## 使用示例, 通过 SSH 访问内网机器
 
 假设公网机器的ip是 `192.168.9.224`
 
-#### 1. 在公网机器上配置`config_s.json`
+#### 1. 在公网机器上新建`config_s.json`文件
 
+`config_s.json`内容:
 ```json
 {
   "port": 18888,
@@ -66,6 +44,8 @@ nt_server -c config_s.json
   }
 }
 ```
+然后启动:
+`nt_server -c config_s.json `
 
 说明: 
 - `port`: 监听端口
@@ -75,13 +55,10 @@ nt_server -c config_s.json
 - `admin.enable`: 是否启用管理页
 - `admin.admin_password`: 管理密码
 
-然后启动:
-`nt_server -c config_s.json `
 
-#### 2. 在需要被访问的内网电脑上配置`config_c.json`
+#### 2. 在需要被访问的内网电脑上新建`config_c.json`文件
 
-配置config_c.json
- 
+config_c.json内容:
 ```json
 {
   "server": {
@@ -95,22 +72,21 @@ nt_server -c config_s.json
   "client": []
 }
 ```
+
+然后启动:
+`nt_client -c config_c.json`
+
 说明:
 - `server`: 要连接的服务器端口, ip, 是否是https, 密码, websocket路径
 - `client_name`: 客户端名称
 - `client`:  空数组
 
-然后启动: 
-`nt_client -c config_c.json`
-
-#### 3. 在网页上添加端口
-
-打开网页: `http://192.168.9.224:18888/websocket_path/admin` 添加端口:
-
+#### 3. 打开服务端网页 `http://192.168.9.224:18888/websocket_path/admin` 添加端口:
 ![V5zWL.md.png](https://i.imgtg.com/2023/02/26/V5zWL.md.png)
 
-#### 4. ssh 连接: 
+说明: 管理页面路径为 **websocket路径 + /admin**
 
+#### 4. 配成成功, 使用 ssh 连接:
 ```
 ssh -oPort=12222 test@192.168.9.224
 ```
@@ -171,6 +147,7 @@ ssh -oPort=12222 test@192.168.9.224
 - 1.1.7: 修复服务端处理重复client_name
 - 1.1.6: 修复客户端 WebSocketException: socket is already opened
 
-## todo
+## TODO
 - 端口限速功能
 - ui美化
+- 视频教程
