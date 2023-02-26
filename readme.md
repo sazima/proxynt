@@ -44,14 +44,10 @@ nt_server -c config_s.json
 ```
 
 启动服务端之后打开浏览器访问管理页:
-```
-管理页面路径为websocket路径+/admin,
-比如 
-http://192.168.9.224:18888/websocket_path/admin
-```
 
+管理页面路径为 **websocket路径+/admin** 比如 `http://192.168.9.224:18888/websocket_path/admin`
 
-![ui](https://i.imgtg.com/2023/02/08/cqirD.png)
+![V5zWL.md.png](https://i.imgtg.com/2023/02/26/V5zWL.md.png)
 
 ## 示例, 通过 SSH 访问内网机器
 
@@ -96,35 +92,29 @@ http://192.168.9.224:18888/websocket_path/admin
     "path": "/websocket_path"
   },
   "client_name": "home_pc",
-  "client": [
-    {
-      "name": "ssh1",
-      "remote_port": 12222,
-      "local_port": 22,
-      "local_ip": "127.0.0.1"
-    }
-  ]
+  "client": []
 }
 ```
 说明:
 - `server`: 要连接的服务器端口, ip, 是否是https, 密码, websocket路径
 - `client_name`: 客户端名称
-- `client`:  这里是将本机的22端口映射到服务器的12222端口上
+- `client`:  空数组
 
 然后启动: 
 `nt_client -c config_c.json`
 
-#### 3. ssh 连接: 
+#### 3. 在网页上添加端口
+
+打开网页: `http://192.168.9.224:18888/websocket_path/admin` 添加端口:
+
+![V5zWL.md.png](https://i.imgtg.com/2023/02/26/V5zWL.md.png)
+
+#### 4. ssh 连接: 
+
 ```
 ssh -oPort=12222 test@192.168.9.224
 ```
 
-
-#### 打开管理页面:
-
-```
-http://192.168.9.224:18888/websocketpath/admin
-```
 
 ## 完整配置说明(使用请删除注释)
 
@@ -180,3 +170,7 @@ http://192.168.9.224:18888/websocketpath/admin
 - 1.1.8: 管理页显示客户端版本
 - 1.1.7: 修复服务端处理重复client_name
 - 1.1.6: 修复客户端 WebSocketException: socket is already opened
+
+## todo
+- 端口限速功能
+- ui美化
