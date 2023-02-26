@@ -83,7 +83,7 @@ class TcpForwardClient:
                 server_socket_list.append(server)
             for c in client_socket_list:
                 c.close()
-                self.socket_event_loop.unregister(c)
+                self.socket_event_loop.unregister_and_remove(c)
                 self.client_to_uid.pop(c)
             for s in server_socket_list:
                 self.listen_socket_server_to_name_ip_port.pop(s)
@@ -91,7 +91,7 @@ class TcpForwardClient:
                     self.listen_socket_server_to_uid_set.pop(s)
                 self.listen_socket_server_to_handler.pop(s)
                 try:
-                    self.socket_event_loop.unregister(s)
+                    self.socket_event_loop.unregister_and_remove(s)
                     s.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
@@ -210,7 +210,7 @@ class TcpForwardClient:
         # with self.close_lock:
         if socket_client not in self.client_to_uid:
             return
-        self.socket_event_loop.unregister(socket_client)
+        self.socket_event_loop.unregister_and_remove(socket_client)
         uid = self.client_to_uid.pop(socket_client)
         self.uid_to_client.pop(uid)
         listen_server_socket = self.uid_to_listen_socket_server.pop(uid)

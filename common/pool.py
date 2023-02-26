@@ -4,7 +4,7 @@ from selectors import DefaultSelector, EVENT_READ
 import select
 import socket
 import traceback
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
@@ -14,11 +14,6 @@ from constant.system_constant import SystemConstant
 """
 
 
-class SocketLoop:
-    def __init__(self):
-        self.is_running = True
-        self.fileno_to_client: Dict[int, socket.socket] = dict()
-        # self.call_back_function: List[callable] = []
 
     # def register(self, s: socket.socket):
     #     self.fileno_to_client[s.fileno()] = s
@@ -27,28 +22,45 @@ class SocketLoop:
     #     if s.fileno() in self.fileno_to_client:
     #         self.fileno_to_client.pop(s.fileno())
     #
-    def add_callback_function(self, f: callable):
-        """回调函数, 参数是 socket"""
-        self.call_back_function.append(f)
 
     # def run(self):
     #     raise NotImplemented()
 
-    def stop(self):
-        self.is_running = False
 
 
-class SelectPool(SocketLoop):
+class SelectPool:
 
     def __init__(self):
-        super(SelectPool, self).__init__()
+        self.is_running = True
+        self.fileno_to_client: Dict[int, socket.socket] = dict()
         self.selector = DefaultSelector()
+        self.waiting_register_socket: Set = set()
+
+    def stop(self):
+        self.is_running = False
 
     def register(self, s: socket.socket, callable_):
         self.fileno_to_client[s.fileno()] = s
         self.selector.register(s, EVENT_READ, callable_)
 
-    def unregister(self, s: socket.socket):
+    def register2(self, s: socket.socket, callable_):
+        if s in self.waiting_register_socket:
+            LoggerFactory.get_logger().info('register 2')
+            self.fileno_to_client[s.fileno()] = s
+            self.selector.register(s, EVENT_READ, callable_)
+            if s in self.waiting_register_socket:
+                self.waiting_register_socket.remove(s)
+
+    def unregister_and_wait_register(self, s: socket.socket):
+        try:
+            self.selector.unregister(s)
+            self.waiting_register_socket.add(s)
+        except OSError:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+
+    def unregister_and_remove(self, s: socket.socket):
+        if s in self.waiting_register_socket:
+            self.waiting_register_socket.remove(s)
         if s.fileno() in self.fileno_to_client:
             self.fileno_to_client.pop(s.fileno())
         try:

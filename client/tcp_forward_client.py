@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import socket
+import threading
 import time
 import traceback
 from threading import Lock
@@ -9,11 +11,18 @@ from common import websocket
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
 from common.pool import SelectPool
+from common.speed_limit import SpeedLimiter
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
+def delay(loop, t, f, *args, **kwargs):
+    # suspend for a time limit in seconds
+    asyncio.set_event_loop(loop)
+    time.sleep(t)
+    # execute the other coroutine
+    f(*args, **kwargs)
 
 class TcpForwardClient:
     def __init__(self, ws: websocket):
@@ -26,6 +35,9 @@ class TcpForwardClient:
         self.lock = Lock()
 
         self.socket_event_loop =  SelectPool()
+        self.limit = SpeedLimiter(2028)
+        self.event_loop = asyncio.get_event_loop()
+
 
     def start_forward(self):
         self.socket_event_loop.is_running = True
@@ -34,10 +46,18 @@ class TcpForwardClient:
     def handle_message(self, each: socket.socket):
         # time.time()
         uid = self.socket_to_uid[each]
+        if self.limit.free_size() > 0:
+            if each in self.socket_event_loop.waiting_register_socket:
+                return
+            LoggerFactory.get_logger().info('un  and register')
+            self.socket_event_loop.unregister_and_wait_register(each)
+            threading.Thread(target=delay, args=(self.event_loop, 0.5, self.socket_event_loop.register2, each, self.handle_message)).start()
+            return
         try:
             recv = each.recv(SystemConstant.CHUNK_SIZE)
         except OSError:
             return
+        self.limit.add(len(recv))
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
@@ -87,7 +107,7 @@ class TcpForwardClient:
         if socket_client in self.socket_to_uid:
             uid = self.socket_to_uid.pop(socket_client)
             self.uid_to_socket.pop(uid)
-            self.socket_event_loop.unregister(socket_client)
+            self.socket_event_loop.unregister_and_remove(socket_client)
             socket_client.close()
             LoggerFactory.get_logger().info(f'close success {socket_client}')
 
@@ -100,7 +120,7 @@ class TcpForwardClient:
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
                 try:
-                    self.socket_event_loop.unregister(s)
+                    self.socket_event_loop.unregister_and_remove(s)
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
             self.uid_to_socket.clear()
