@@ -86,7 +86,7 @@ config_c.json内容:
 
 说明: 管理页面路径为 **websocket路径 + /admin**
 
-#### 4. 配成成功, 使用 ssh 连接:
+#### 4. 配置成功, 使用 ssh 连接:
 ```
 ssh -oPort=12222 test@192.168.9.224
 ```
