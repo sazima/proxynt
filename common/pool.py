@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from selectors import DefaultSelector, EVENT_READ
@@ -53,9 +54,11 @@ class SelectPool:
             try:
                 if s not in self.socket_to_lock:
                     return
-                if data.speed_limiter.is_exceed():
+                is_exceed, remain = data.speed_limiter.is_exceed()
+                if is_exceed:
                     # 再次延迟检测
-                    LoggerFactory.get_logger().debug('delay register again')
+                    if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                        LoggerFactory.get_logger().debug('delay register again, maybe next: %.2f seconds "  ' % (remain / data.speed_limiter.max_speed))
                     threading.Timer(delay_time, _register_again).start()
                     return
                 with self.socket_to_lock[s]:

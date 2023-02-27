@@ -1,4 +1,6 @@
 import time
+from typing import Tuple
+
 
 class SpeedLimiter(object):
     def __init__(self, max_speed=0):
@@ -19,12 +21,13 @@ class SpeedLimiter(object):
             self.last_time = cut_t
             self.sum_len += data_len
 
-    def is_exceed(self):
+    def is_exceed(self) -> Tuple[bool, float]:
         if self.max_speed > 0:
             cut_t = time.time()
             self.sum_len -= (cut_t - self.last_time) * self.max_speed
             if self.sum_len < 0:
                 self.sum_len = 0
             self.last_time = cut_t
-            return self.sum_len >= self.max_speed
-        return False
+            remain = self.sum_len - self.max_speed
+            return remain >= 0, remain
+        return False, 1

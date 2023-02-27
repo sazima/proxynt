@@ -112,7 +112,7 @@ class TcpForwardClient:
     def handle_message(self, each: socket.socket,  data: ResisterAppendData):
         # 发送到websocket
         each: socket.socket
-        if data.speed_limiter and data.speed_limiter.is_exceed():
+        if data.speed_limiter and data.speed_limiter.is_exceed()[0]:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug('over speed')
             self.socket_event_loop.unregister_and_register_delay(each, data, 1)
