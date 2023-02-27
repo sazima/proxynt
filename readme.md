@@ -83,7 +83,8 @@ config_c.json内容:
 - `client`:  空数组
 
 #### 3. 打开服务端网页 `http://192.168.9.224:18888/websocket_path/admin` 添加端口:
-![V5zWL.md.png](https://i.imgtg.com/2023/02/26/V5zWL.md.png)
+
+![VWCvq.md.png](https://i.imgtg.com/2023/02/27/VWCvq.md.png)
 
 说明: 管理页面路径为 **websocket路径 + /admin**
 
