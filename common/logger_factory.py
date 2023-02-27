@@ -1,7 +1,7 @@
 import os
 import logging
 import os
-from logging.handlers import TimedRotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler, RotatingFileHandler
 
 from context.context_utils import ContextUtils
 
@@ -13,7 +13,8 @@ class LoggerFactory:
     fmt = '%(asctime)s  %(name)s %(levelname)s %(pathname)s %(funcName)s %(lineno)d : %(message)s'
     logger = logging.getLogger("logger")
     default_log_file = os.path.join('log', 'log.log')
-    backupCount = 30
+    backupCount = 10
+    MAX_BYTES = 1024 * 5  # 5 MB
     # tz = 'Asia/Shanghai'
 
     @classmethod
@@ -45,10 +46,8 @@ class LoggerFactory:
                 log_file = cls.default_log_file
         else:
             log_file = cls.default_log_file
-        # log_file = ContextUtils.get_log_file() if ContextUtils.get_log_file() else  cls.default_log_file
         cls.check_log_directory(log_file)
-        print(f'log_file: {log_file}')
-        handler = TimedRotatingFileHandler(log_file, when="d", backupCount=cls.backupCount)
+        handler = RotatingFileHandler(log_file,  backupCount=cls.backupCount, maxBytes=cls.MAX_BYTES)
         formatter = logging.Formatter(cls.fmt)
         handler.setFormatter(formatter)
         logger.addHandler(handler)
