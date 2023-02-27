@@ -14,7 +14,7 @@ class LoggerFactory:
     logger = logging.getLogger("logger")
     default_log_file = os.path.join('log', 'log.log')
     backupCount = 10
-    MAX_BYTES = 1024 * 5  # 5 MB
+    MAX_BYTES = 1024 * 1024 * 5  # 5 MB
     # tz = 'Asia/Shanghai'
 
     @classmethod

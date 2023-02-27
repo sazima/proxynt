@@ -37,14 +37,21 @@
                             label="限速(单位MB)"
                             width="180">
                     </el-table-column>
-                    <el-table-column label="操作" width="100">
+                    <el-table-column label="操作" width="200">
 
                         <template slot-scope="scope">
+                            <el-row>
+                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
+                                           size="mini"
+                                           @click="handleDelete(props.row.client_name, scope.row.name)">删除
+                                </el-button>
+                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
+                                           size="mini"
+                                           @click="handleEdit(scope.row, props.row.client_name)">编辑
+                                </el-button>
+                            </el-row>
 
-                            <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
-                                       size="mini"
-                                       @click="handleDelete(props.row.client_name, scope.row.name)">删除
-                            </el-button>
+
                         </template>
                     </el-table-column>
                 </el-table>
@@ -82,10 +89,10 @@
         </el-table-column>
     </el-table>
 
-    <el-dialog title="新增配置后该客户端将重新连接" :visible.sync="dialogFormVisible">
+    <el-dialog title="确定后客户端将重新连接" :visible.sync="dialogFormVisible">
         <el-form :model="form">
-            <el-form-item label="名称" :label-width="formLabelWidth">
-                <el-input v-model="form.name" autocomplete="off"></el-input>
+            <el-form-item label="名称" :label-width="formLabelWidth" >
+                <el-input v-model="form.name" autocomplete="off" :disabled="form.is_edit"></el-input>
             </el-form-item>
             <el-form-item label="远程端口" :label-width="formLabelWidth">
                 <el-input v-model="form.remote_port" type='number' autocomplete="off"></el-input>
@@ -97,14 +104,16 @@
             <el-form-item label="本地端口" :label-width="formLabelWidth">
                 <el-input v-model="form.local_port" type='number' autocomplete="off"></el-input>
             </el-form-item>
-            {[form.speed_limit]}
-            <el-form-item label="限速(单位MB, 0表示不限制)" :label-width="formLabelWidth">
-                <el-input v-model="form.speed_limit" type='number' autocomplete="off"></el-input>
+
+            <el-form-item label="限速(MB)" :label-width="formLabelWidth">
+                <el-tooltip class="item" effect="dark" content="限速, 0表示不限制" placement="bottom">
+                    <el-input v-model="form.speed_limit" type='number' autocomplete="off"></el-input>
+                </el-tooltip>
             </el-form-item>
         </el-form>
         <div slot="footer" class="dialog-footer">
             <el-button @click="dialogFormVisible = false">取 消</el-button>
-            <el-button type="primary" @click="submitAdd">确 定</el-button>
+            <el-button type="primary" @click="submitAddOrEdit">确 定</el-button>
         </div>
     </el-dialog>
 </div>
@@ -139,6 +148,7 @@
         methods: {
             handleAdd(row) {
                 this.form = {
+                    is_edit: false,
                     client_name: '',
                     name: '',
                     local_port: '',
@@ -150,8 +160,20 @@
                 console.log(row);
                 this.dialogFormVisible = true
             },
-            submitAdd() {
-                // const url = window.location.href + '/api'
+            handleEdit(row, client_name) {
+                this.form = {
+                    is_edit: true,
+                    client_name: client_name,
+                    name: row.name,
+                    local_port: row.local_port,
+                    local_ip: row.local_ip,
+                    remote_port: row.remote_port,
+                    speed_limit: row.speed_limit
+                }
+                console.log('-------',  row);
+                this.dialogFormVisible = true
+            },
+            submitAddOrEdit() {
                 var url = window.location.href.split('?')[0] + '/api'
 
                 console.log(this.form)

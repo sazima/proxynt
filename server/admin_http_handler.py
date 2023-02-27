@@ -3,7 +3,7 @@ import json
 import os
 import time
 import traceback
-from typing import List, Set
+from typing import List, Set, Tuple
 
 from tornado.web import RequestHandler
 
@@ -120,6 +120,7 @@ class AdminHttpApiHandler(RequestHandler):
             LoggerFactory.get_logger().error(traceback.format_exc())
 
     def delete(self, *args, **kwargs):
+        """删除"""
         try:
             # request_data = json.loads(self.request.body)
             cookie_dict = ContextUtils.get_cookie_to_time()
@@ -161,6 +162,7 @@ class AdminHttpApiHandler(RequestHandler):
             LoggerFactory.get_logger().error(traceback.format_exc())
 
     async def post(self):
+        """新增  或 编辑"""
         try:
             cookie_dict = ContextUtils.get_cookie_to_time()
             result = self.get_cookie(COOKIE_KEY)
@@ -171,12 +173,12 @@ class AdminHttpApiHandler(RequestHandler):
                     'msg': '登录信息已经过期, 请重新刷新页面'
                 })
                 return
-            online_client_name_list: List[str] = list(MyWebSocketaHandler.client_name_to_handler.keys())
             request_data = json.loads(self.request.body)
             LoggerFactory.get_logger().info(f'add config {request_data}')
             client_name = request_data.get('client_name')
             name = request_data.get('name')
             remote_port = int(request_data.get('remote_port'))
+            is_edit = request_data.get('is_edit', False)  # 是否是编辑
             local_ip = request_data.get('local_ip')
             local_port = int(request_data.get('local_port'))
             speed_limit = float(request_data.get('speed_limit'))
@@ -215,25 +217,6 @@ class AdminHttpApiHandler(RequestHandler):
                     'msg': '本地port不合法'
                 })
                 return
-            if client_name in MyWebSocketaHandler.client_name_to_handler:
-                handler = MyWebSocketaHandler.client_name_to_handler[client_name]
-                names = handler.names
-            else:
-                names = set()
-            if not name or name in names:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': 'name不合法或者重复'
-                })
-                return
-            if self.is_port_in_use(remote_port):
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': '远程端口已占用, 请更换端口'
-                })
-                return
             if remote_port < MIN_PORT:
                 self.write({
                     'code': 400,
@@ -241,28 +224,17 @@ class AdminHttpApiHandler(RequestHandler):
                     'msg': f'端口最小为 {MIN_PORT}, 请更换端口'
                 })
                 return
-
-            new_config: ClientData = {
-                'name': name,
-                'remote_port': remote_port,
-                'local_port': local_port,
-                'local_ip': local_ip,
-                'speed_limit': speed_limit
-            }
-
-            client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
-            if client_name in client_name_to_config_in_server:
-                for c in client_name_to_config_in_server[client_name]:
-                    if c['name'] == name:
-                        self.write({
-                            'code': 400,
-                            'data': '',
-                            'msg': 'name不合法'
-                        })
-                        return
-                client_name_to_config_in_server[client_name].append(new_config)  # 更新配置
+            if not is_edit:
+                is_ok, msg = self._add(client_name, name, remote_port, local_port, local_ip, speed_limit)
             else:
-                client_name_to_config_in_server[client_name] = [new_config]  # 更新配置
+                is_ok, msg = self._edit(client_name, name, remote_port, local_port, local_ip, speed_limit)
+            if not is_ok:
+                self.write({
+                    'code': 400,
+                    'data': '',
+                    'msg': msg
+                })
+                return
             if client_name in MyWebSocketaHandler.client_name_to_handler:
                 MyWebSocketaHandler.client_name_to_handler[client_name].close(0, 'close by server')
             self.write({
@@ -272,13 +244,51 @@ class AdminHttpApiHandler(RequestHandler):
             })
             self.update_config_file()
             return
-            # with open(config_file_path, 'rb') as rf:
-            #     server_config_data: ServerConfigEntity = json.load(rf)
-            # client_config = server_config_data.get('client_config')
-            # if not client_config:
-            #     pass
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
+
+    def _edit(self, client_name: str, name: str, remote_port: int, local_port: int, local_ip: str, speed_limit: float) -> Tuple[bool, str]:
+        client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
+        if client_name not in client_name_to_config_in_server:
+            return True,  '该客户端名称不存在'
+        for c in client_name_to_config_in_server[client_name]:
+            if c['name'] == name:  # 修改的这条配置
+                if c['remote_port'] != remote_port:
+                    if self.is_port_in_use(remote_port):
+                        return False, '远程端口已占用, 请更换端口'
+                c['local_ip'] = local_ip
+                c['remote_port'] = remote_port
+                c['local_port'] = local_port
+                c['speed_limit'] = speed_limit
+                return True, ''
+        return False, '编辑的名称不存在'
+
+    def _add(self, client_name: str, name: str, remote_port: int, local_port: int, local_ip: str, speed_limit: float ) -> Tuple[bool, str]:
+        client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
+        if client_name in MyWebSocketaHandler.client_name_to_handler:
+            handler = MyWebSocketaHandler.client_name_to_handler[client_name]
+            names = handler.names
+        else:
+            names = set()
+        if name in names:
+            return False, 'name不合法或者重复'
+        if self.is_port_in_use(remote_port):
+            return False, '远程端口已占用, 请更换端口'
+        new_config: ClientData = {
+            'name': name,
+            'remote_port': remote_port,
+            'local_port': local_port,
+            'local_ip': local_ip,
+            'speed_limit': speed_limit
+        }
+        if client_name in client_name_to_config_in_server:
+            for c in client_name_to_config_in_server[client_name]:
+                if c['name'] == name:
+                    return False,  'name不合法'
+            client_name_to_config_in_server[client_name].append(new_config)  # 更新配置
+        else:
+            client_name_to_config_in_server[client_name] = [new_config]  # 更新配置
+        return True, ''
 
     def update_config_file(self):
         with open(ContextUtils.get_config_file_path(), 'r') as rf:
