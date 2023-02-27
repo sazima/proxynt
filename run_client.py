@@ -9,13 +9,14 @@ import time
 import traceback
 from optparse import OptionParser
 from threading import Thread
-from typing import List, Set
+from typing import List, Set, Dict
 
+from tornado import ioloop
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from common.speed_limit import SpeedLimiter
 from common.websocket import WebSocketException
-from tornado import ioloop
 
 from client.clear_nonce_task import ClearNonceTask
 from client.heart_beat_task import HeatBeatTask
@@ -41,18 +42,16 @@ DEFAULT_CONFIG = './config_c.json'
 
 DEFAULT_LOGGER_LEVEL = logging.INFO
 
-name_to_level = {
+NAME_TO_LEVEL = {
     'debug': logging.DEBUG,
     'info': logging.INFO,
     'warn': logging.WARN,
     'error': logging.ERROR
 }
 
-level_to_name = {
-    k: v.upper() for v, k in name_to_level.items()
-}
 OPEN_CLOSE_LOCK = threading.Lock()
 
+name_to_speed_limiter: Dict[str, SpeedLimiter] = {}
 
 def get_config() -> ClientConfigEntity:
     parser = OptionParser(usage="""usage: %prog -c config_c.json 
@@ -92,10 +91,10 @@ config_c.json example:
                       )
     (options, args) = parser.parse_args()
     log_level = options.log_level
-    if log_level not in name_to_level:
+    if log_level not in NAME_TO_LEVEL:
         print('invalid log level.')
         sys.exit()
-    ContextUtils.set_log_level(name_to_level[log_level])
+    ContextUtils.set_log_level(NAME_TO_LEVEL[log_level])
     config_path = options.config
     with open(config_path, 'r') as rf:
         config_data: ClientConfigEntity = json.loads(rf.read())
@@ -125,22 +124,25 @@ class WebsocketClient:
             start_time = time.time()
             time_ = message_data['type_']
             if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
-                # LoggerFactory.get_logger().debug(f'get websocket message {message_data}')
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
                 name = data['name']
                 b = data['data']
-                self.forward_client.create_socket(name, uid, data['ip_port'])
+                self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
                 self.forward_client.send_by_uid(uid, b)
             elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
                 name = data['name']
                 b = data['data']
-                self.forward_client.create_socket(name, uid, data['ip_port'])
+                self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
             elif message_data['type_'] == MessageTypeConstant.PING:
                 self.heart_beat_task.set_recv_heart_beat_time(time.time())
-
+            elif message_data['type_'] == MessageTypeConstant.PUSH_CONFIG:
+                push_config: PushConfigEntity = message_data['data']
+                for d in push_config['config_list']:
+                    if d.get('speed_limit'):
+                        name_to_speed_limiter[d['name']] = SpeedLimiter(d['speed_limit'])
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
         # LoggerFactory.get_logger().debug(f'on message {time_} cost time {time.time() - start_time}')

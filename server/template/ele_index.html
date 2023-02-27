@@ -32,6 +32,11 @@
                             label="本地端口"
                             width="180">
                     </el-table-column>
+                    <el-table-column
+                            prop="speed_limit"
+                            label="限速(单位MB)"
+                            width="180">
+                    </el-table-column>
                     <el-table-column label="操作" width="100">
 
                         <template slot-scope="scope">
@@ -92,6 +97,10 @@
             <el-form-item label="本地端口" :label-width="formLabelWidth">
                 <el-input v-model="form.local_port" type='number' autocomplete="off"></el-input>
             </el-form-item>
+            {[form.speed_limit]}
+            <el-form-item label="限速(单位MB, 0表示不限制)" :label-width="formLabelWidth">
+                <el-input v-model="form.speed_limit" type='number' autocomplete="off"></el-input>
+            </el-form-item>
         </el-form>
         <div slot="footer" class="dialog-footer">
             <el-button @click="dialogFormVisible = false">取 消</el-button>
@@ -113,7 +122,8 @@
                     name: '',
                     local_port: '',
                     local_ip: '127.0.0.1',
-                    remote_port: ''
+                    remote_port: '',
+                    speed_limit: 0
                 },
                 intervalTask: ''
 
@@ -133,7 +143,8 @@
                     name: '',
                     local_port: '',
                     local_ip: '127.0.0.1',
-                    remote_port: ''
+                    remote_port: '',
+                    speed_limit: 0
                 }
                 this.form.client_name = row.client_name
                 console.log(row);

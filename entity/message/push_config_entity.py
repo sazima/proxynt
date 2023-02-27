@@ -8,6 +8,7 @@ class ClientData(TypedDict):
     remote_port: int
     local_port: int
     local_ip: str
+    speed_limit: float
 
 
 class PushConfigEntity(TypedDict):

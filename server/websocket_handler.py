@@ -108,11 +108,14 @@ class MyWebSocketaHandler(WebSocketHandler):
                             # tcp_forward_client.close_by_client_name(self.client_name)
                             raise
                         ip_port = d['local_ip'] + ':' + str(d['local_port'])
-                        await tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self)
+                        d.setdefault('speed_limit', 0)
+                        speed_limit: float = d.get('speed_limit', 0)  # 网速限制
+                        await tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self, speed_limit)
                         listen_socket_list.append(listen_socket)
                     self.handler_to_recv_time[self] = time.time()
                     self.client_name_to_handler[client_name] = self
                     self.push_config = push_config
+                await self.write_message(NatSerialization.dumps(message_dict, key), binary=True)  # 更新完配置再发给客户端
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.handler_to_recv_time[self] = time.time()
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
@@ -124,6 +127,7 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self._on_close(code, reason))
 
     async def _on_close(self, code: int = None, reason: str = None) -> None:
+        print('close', self.client_name)
         try:
             async with self.lock:
                 if self.client_name:

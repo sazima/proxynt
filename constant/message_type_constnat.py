@@ -7,3 +7,4 @@ class MessageTypeConstant:
     REQUEST_TO_CONNECT = '5'
 
     PING = '4'
+

@@ -179,6 +179,7 @@ class AdminHttpApiHandler(RequestHandler):
             remote_port = int(request_data.get('remote_port'))
             local_ip = request_data.get('local_ip')
             local_port = int(request_data.get('local_port'))
+            speed_limit = float(request_data.get('speed_limit'))
             if not client_name:
                 self.write({
                     'code': 400,
@@ -191,6 +192,13 @@ class AdminHttpApiHandler(RequestHandler):
                     'code': 400,
                     'data': '',
                     'msg': '远程ip不能为空'
+                })
+                return
+            if speed_limit < 0:
+                self.write({
+                    'code': 400,
+                    'data': '',
+                    'msg': '限速必须大于等于0'
                 })
                 return
             if not local_ip:
@@ -238,7 +246,8 @@ class AdminHttpApiHandler(RequestHandler):
                 'name': name,
                 'remote_port': remote_port,
                 'local_port': local_port,
-                'local_ip': local_ip
+                'local_ip': local_ip,
+                'speed_limit': speed_limit
             }
 
             client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
