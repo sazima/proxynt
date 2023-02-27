@@ -15,6 +15,7 @@
 2. 公网服务器和内网客户端之间使用 WebSocket 加密传输
 3. 依赖少, 使用 pip一键安装
 4. 稳定, 自动重连, 已在生产环境中使用
+5. 支持限速
 
 ## 常用场景
 1. 在家托管网站服务器
@@ -104,7 +105,7 @@ ssh -oPort=12222 test@192.168.9.224
     "password": "helloworld",  // 密码
     "path": "/websocket_path"  // websocket 路径
   },
-  "client": [  // 转发的配置列表
+  "client": [  // 转发的配置列表(这里可以不填, 在服务端网页上配置)
     {
       "name": "ssh",
       "remote_port": 1222,
@@ -148,6 +149,5 @@ ssh -oPort=12222 test@192.168.9.224
 - 1.1.6: 修复客户端 WebSocketException: socket is already opened
 
 ## TODO
-- 端口限速功能
 - ui美化
 - 视频教程
