@@ -101,6 +101,7 @@ config_c.json example:
     ContextUtils.set_config_file_path(os.path.abspath(config_path))
     ContextUtils.set_password(config_data['server']['password'])
     name_set: Set[str] = set()
+    config_data.setdefault('client', [])
     for client in config_data['client']:
         if client['name'] in name_set:
             raise DuplicatedName()
