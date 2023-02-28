@@ -47,7 +47,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                 LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}, len: {len(message)}')
             return
         except Exception:
-            LoggerFactory.get_logger().info(message)
+            LoggerFactory.get_logger().info(f'send error: {message[:10]}')
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise
 
