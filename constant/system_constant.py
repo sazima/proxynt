@@ -4,7 +4,7 @@ class SystemConstant:
 
     HEART_BEAT_INTERVAL = 15
     MAX_HEART_BEAT_SECONDS = 60  # 超过一定秒数没有心跳就关闭
-    MAX_TIME_DIFFERENCE = 360  # 十分钟
+    MAX_TIME_DIFFERENCE = 360  # 6分钟
 
     ADMIN_PATH = 'admin'
     GENERATOR_NAME_PREFIX = 'admin_'
@@ -15,6 +15,6 @@ class SystemConstant:
 
     COOKIE_EXPIRE_SECONDS = 3600 * 24
 
-    VERSION = '1.1.8'
+    VERSION = '1.1.9'
 
     GITHUB = 'https://github.com/sazima/proxynt'
