@@ -1,60 +1,34 @@
-# 
-
 [中文](./readme.md)
 
 ProxyNT is a reverse proxy server that can expose a local server to the internet through NATs and firewalls
-## Principle
 
 ![原理](https://i.imgtg.com/2023/02/08/cqhoI.png)
 
-
 ## Features
-- Easily manage port forwarding from anywhere via a browser
-- Uses WebSocket encryption for secure communication between the public server and local client
-- Easy to install with pip.
-- Stable, automatically reconnects, and has been used in production environments
+1. Open port mapping via browser anytime and anywhere
+2. Encrypted transmission between public network server and local network client via WebSocket
+3. Few dependencies, one-click installation via pip
+4. Stable, automatically reconnect, and already in production environment
+5. Support for rate limiting
 
-## Common Use Cases
-
-1. Host web servers from home
-2. Manage IoT devices
+## Common Scenarios
+1. Hosting website server at home
+2. Managing IoT devices
 
 ## Installation
 
-```bash
+```
 pip install -U proxynt
 ```
 
-
-## Usage
-Client
-```bash
-nt_client --help
-# start client
-nt_client -c config_c.json
-```
-Server
-
-```bash
-# view help
-nt_server --help
-# start server
-nt_server -c config_s.json
-```
-After starting the server, open the management page in a browser:
-```bash
-The management page URL is the WebSocket path + /admin,
-for example:
-http://192.168.9.224:18888/websocket_path/admin
-```
-![ui](https://i.imgtg.com/2023/02/08/cqirD.png)
 
 ## Example: Accessing an Internal Network Machine via SSH
 
 Suppose the public server's IP is 192.168.9.224.
 
-#### 1. Configure config_s.json on the public server
+#### 1. Create `config_s.json` file on the public network machine
 
+`config_s.json` content:
 
 ```json
 {
@@ -67,21 +41,23 @@ Suppose the public server's IP is 192.168.9.224.
   }
 }
 ```
+
+
+
+Then start:
+`nt_server -c config_s.json`
+
 Explanation:
+- `port`: Listening port
+- `password`: Connection password
+- `path`: WebSocket path
+- `admin`: Management page configuration (optional)
+- `admin.enable`: Whether to enable management page
+- `admin.admin_password`: Management password
 
-- port: listening port
-- password: connection password
-- path: WebSocket path
-- admin: management page configuration (not required)
-- admin.enable: whether to enable the management page
-- admin.admin_password: management password
+#### 2. Create `config_c.json` file on the local network computer that needs to be accessed
 
-Then start the server with:
-```bash
-nt_server -c config_s.json
-```
-
-#### 2. Configure config_c.json on the machine to be accessed
+`config_c.json` content:
 
 ```json
 {
@@ -93,41 +69,32 @@ nt_server -c config_s.json
     "path": "/websocket_path"
   },
   "client_name": "home_pc",
-  "client": [
-    {
-      "name": "ssh1",
-      "remote_port": 12222,
-      "local_port": 22,
-      "local_ip": "127.0.0.1"
-    }
-  ]
+  "client": []
 }
 ```
 
+Then start:
+`nt_client -c config_c.json`
+
 Explanation:
+- `server`: Configuration of the server to be connected, including port, IP address, whether to use HTTPS, password, and WebSocket path.
+- `client_name`: Client name, needs to be unique.
+- `client`: Empty array.
 
-- `server`: configuration for the server to connect to, including port, IP address, whether to use HTTPS, password, and WebSocket path.
-- `client_name`: name of the client, which must be unique.
-- `client`: list of port forwarding configurations, mapping port 22 on the local machine to port 12222 on the server in this example.
+#### 3. Open the server webpage `http://192.168.9.224:18888/websocket_path/admin` and add a port:
 
-Then start the client with:
+![VWCvq.md.png](https://i.imgtg.com/2023/02/27/VWCvq.md.png)
+
+
+Explanation: The management page path is **WebSocket path + /admin** .
+#### 4. Configuration succeeded, use SSH to connect:
+
 ```bash
-nt_client -c config_c.json
-```
-
-#### 3. SSH connection
-
-```
 ssh -oPort=12222 test@192.168.9.224
 ```
 
-#### Open the management page
 
-```
-http://192.168.9.224:18888/websocketpath/admin
-```
-
-## Full Configuration Description (please delete the comments when using)
+## Complete Configuration Instructions (please delete the comments when using)
 
 
 - Client config_c.json
@@ -190,6 +157,7 @@ http://192.168.9.224:18888/websocketpath/admin
 
 ## Update history
 
+- 1.1.9: Bandwidth limitation
 - 1.1.8: Display client version
 - 1.1.7: Fixed duplicate client_name
 - 1.1.6: Fixed client WebSocketException: socket is already opened.
