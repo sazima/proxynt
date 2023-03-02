@@ -117,7 +117,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.push_config = push_config
                 await self.write_message(NatSerialization.dumps(message_dict, key), binary=True)  # 更新完配置再发给客户端
             elif message_dict['type_'] == MessageTypeConstant.PING:
-                self.handler_to_recv_time[self] = time.time()
+                if self.client_name:  # 只有带 client_name 的心跳时间才有用
+                    self.handler_to_recv_time[self] = time.time()
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
         except Exception:
@@ -128,6 +129,11 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     async def _on_close(self, code: int = None, reason: str = None) -> None:
         print('close', self.client_name)
+        try:
+            if self in self.handler_to_recv_time:
+                self.handler_to_recv_time.pop(self)
+        except Exception:
+            LoggerFactory.get_logger().info(traceback.format_exc())
         try:
             async with self.lock:
                 if self.client_name:
