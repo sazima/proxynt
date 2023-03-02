@@ -7,7 +7,7 @@ Type=simple
 User=root
 Restart=on-failure
 RestartSec=5s
-ExecStart=/usr/bin/python3 /usr/local/nat_traversal/run_server.py -c /usr/local/nat_traversal/config_s.json
+ExecStart=/usr/local/bin/nt_server -c /etc/nt/config_s.json
 
 [Install]
 WantedBy=multi-user.target
