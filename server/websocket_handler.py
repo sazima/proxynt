@@ -29,8 +29,9 @@ class MyWebSocketaHandler(WebSocketHandler):
     version: str
     push_config: PushConfigEntity
     names: Set[str]
+    recv_time: float = None
 
-    handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
+    # handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock = Lock()
 
@@ -112,13 +113,15 @@ class MyWebSocketaHandler(WebSocketHandler):
                         speed_limit: float = d.get('speed_limit', 0)  # 网速限制
                         await tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self, speed_limit)
                         listen_socket_list.append(listen_socket)
-                    self.handler_to_recv_time[self] = time.time()
+                    # self.handler_to_recv_time[self] = time.time()
+                    self.recv_time = time.time()
                     self.client_name_to_handler[client_name] = self
                     self.push_config = push_config
                 await self.write_message(NatSerialization.dumps(message_dict, key), binary=True)  # 更新完配置再发给客户端
             elif message_dict['type_'] == MessageTypeConstant.PING:
-                if self.client_name:  # 只有带 client_name 的心跳时间才有用
-                    self.handler_to_recv_time[self] = time.time()
+                self.recv_time = time.time()
+                # if self.client_name:  # 只有带 client_name 的心跳时间才有用
+                #     self.handler_to_recv_time[self] = time.time()
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
         except Exception:
@@ -128,17 +131,9 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self._on_close(code, reason))
 
     async def _on_close(self, code: int = None, reason: str = None) -> None:
-        print('close', self.client_name)
-        try:
-            if self in self.handler_to_recv_time:
-                self.handler_to_recv_time.pop(self)
-        except Exception:
-            LoggerFactory.get_logger().info(traceback.format_exc())
         try:
             async with self.lock:
                 if self.client_name:
-                    if self in self.handler_to_recv_time:
-                        self.handler_to_recv_time.pop(self)
                     if self.client_name in self.client_name_to_handler:
                         self.client_name_to_handler.pop(self.client_name)
                     await TcpForwardClient.get_instance().close_by_client_name(self.client_name)
