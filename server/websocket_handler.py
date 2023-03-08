@@ -21,6 +21,8 @@ from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
 from exceptions.invalid_password import InvalidPassword
+from exceptions.replay_error import ReplayError
+from exceptions.signature_error import SignatureError
 from server.tcp_forward_client import TcpForwardClient
 
 
@@ -61,6 +63,12 @@ class MyWebSocketaHandler(WebSocketHandler):
         except json.decoder.JSONDecodeError:
             self.close(reason='invalid password')
             raise InvalidPassword()
+        except SignatureError:
+            self.close(reason='SignatureError')
+            raise
+        except ReplayError:
+            self.close(reason='ReplayError')
+            raise
         try:
             start_time = time.time()
             if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
