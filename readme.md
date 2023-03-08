@@ -26,6 +26,7 @@
 ```
 pip install -U proxynt
 ```
+如果需要安装安卓端 [点击](https://github.com/sazima/proxynt_android)
 
 ## 使用示例, 通过 SSH 访问内网机器
 
