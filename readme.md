@@ -1,6 +1,6 @@
+ProxyNT 是一个反向代理服务器，可以透过NAT和防火墙将本地服务器暴露到公网上
 
 ## [English Readme](./readme_en.md)
-
 # 内网穿透工具
 - github: https://github.com/sazima/proxynt
 - gitee: https://gitee.com/sazima1/proxynt
