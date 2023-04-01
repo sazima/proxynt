@@ -2,92 +2,98 @@
 {% block body%}
 
 <div id="app">
-    <el-table
-            :data="tableData"
-            medium="medium"
-            row-key="client_name"
-            style="width: 90%; margin: 0 auto">
-        <el-table-column type="expand">
-            <template slot-scope="props">
-                <el-table
-                        :data="props.row.config_list"
-                        stripe>
-                    <el-table-column
-                            prop="name"
-                            label="名称"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="remote_port"
-                            label="远程端口"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="local_ip"
-                            label="本地ip"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="local_port"
-                            label="本地端口"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="speed_limit"
-                            label="限速(单位MB)"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column label="操作" width="200">
+    <div class="app-container" style="width: 90%; margin: 0 auto">
+        <div class="filter-container">
+            <el-button style="float:right" @click="clickShowConfigDialog">生成配置</el-button>
+        </div>
+        <el-table
+                :data="tableData"
+                medium="medium"
+                row-key="client_name"
+                >
+            <el-table-column type="expand">
+                <template slot-scope="props">
+                    <el-table
+                            :data="props.row.config_list"
+                            stripe>
+                        <el-table-column
+                                prop="name"
+                                label="名称"
+                                width="180">
+                        </el-table-column>
+                        <el-table-column
+                                prop="remote_port"
+                                label="远程端口"
+                                width="180">
+                        </el-table-column>
+                        <el-table-column
+                                prop="local_ip"
+                                label="本地ip"
+                                width="180">
+                        </el-table-column>
+                        <el-table-column
+                                prop="local_port"
+                                label="本地端口"
+                                width="180">
+                        </el-table-column>
+                        <el-table-column
+                                prop="speed_limit"
+                                label="限速(单位MB)"
+                                width="180">
+                        </el-table-column>
+                        <el-table-column label="操作" width="200">
 
-                        <template slot-scope="scope">
-                            <el-row>
-                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
-                                           size="mini"
-                                           @click="handleDelete(props.row.client_name, scope.row.name)">删除
-                                </el-button>
-                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
-                                           size="mini"
-                                           @click="handleEdit(scope.row, props.row.client_name)">编辑
-                                </el-button>
-                            </el-row>
+                            <template slot-scope="scope">
+                                <el-row>
+                                    <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
+                                               size="mini"
+                                               @click="handleDelete(props.row.client_name, scope.row.name)">删除
+                                    </el-button>
+                                    <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
+                                               size="mini"
+                                               @click="handleEdit(scope.row, props.row.client_name)">编辑
+                                    </el-button>
+                                </el-row>
 
 
-                        </template>
-                    </el-table-column>
-                </el-table>
-            </template>
-        </el-table-column>
-        <el-table-column
-                prop="client_name"
-                label="名称"
-        >
-        </el-table-column>
-        <el-table-column
-                prop="version"
-                label="版本"
-        >
-        </el-table-column>
-        <el-table-column
-                prop="status"
-                label="状态"
-                :filters="[{ text: 'online', value: 'online' }, { text: 'offline', value: 'offline' }]"
-                filter-placement="bottom-end">
-            <template slot-scope="scope">
-                <el-tag
-                        :type="scope.row.status === 'offline' ? 'danger' : 'success'"
-                        disable-transitions>{[scope.row.status]}
-                </el-tag>
-            </template>
-        </el-table-column>
-        <el-table-column label="操作">
-            <template slot-scope="scope">
-                <el-button
-                        size="mini"
-                        @click="handleAdd(scope.row)">新增配置
-                </el-button>
-            </template>
-        </el-table-column>
-    </el-table>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                </template>
+            </el-table-column>
+            <el-table-column
+                    prop="client_name"
+                    label="名称"
+            >
+            </el-table-column>
+            <el-table-column
+                    prop="version"
+                    label="版本"
+            >
+            </el-table-column>
+            <el-table-column
+                    prop="status"
+                    label="状态"
+                    :filters="[{ text: 'online', value: 'online' }, { text: 'offline', value: 'offline' }]"
+                    filter-placement="bottom-end">
+                <template slot-scope="scope">
+                    <el-tag
+                            :type="scope.row.status === 'offline' ? 'danger' : 'success'"
+                            disable-transitions>{[scope.row.status]}
+                    </el-tag>
+                </template>
+            </el-table-column>
+            <el-table-column label="操作">
+                <template slot-scope="scope">
+                    <el-button
+                            size="mini"
+                            @click="handleAdd(scope.row)">新增配置
+                    </el-button>
+                </template>
+            </el-table-column>
+        </el-table>
+
+    </div>
 
     <el-dialog title="确定后客户端将重新连接" :visible.sync="dialogFormVisible">
         <el-form :model="form">
@@ -116,6 +122,23 @@
             <el-button type="primary" @click="submitAddOrEdit">确 定</el-button>
         </div>
     </el-dialog>
+
+
+    <el-dialog title="获取配置" :visible.sync="showConfigDialog">
+        <el-form :model="form">
+            <el-form-item label="客户端名称" :label-width="formLabelWidth" >
+                <el-input v-model="form1.client_name" autocomplete="off" :disabled="form.is_edit"></el-input>
+            </el-form-item>
+            <el-form-item label="结果" prop="desc"  :label-width="formLabelWidth">
+                <el-input type="textarea" v-model="form1.result" rows="11"></el-input>
+            </el-form-item>
+        </el-form>
+
+        <div slot="footer" class="dialog-footer">
+            <el-button @click="dialogFormVisible = false">取 消</el-button>
+            <el-button type="primary" @click="get_client_config">确 定</el-button>
+        </div>
+    </el-dialog>
 </div>
 <script>
     new Vue({
@@ -125,6 +148,7 @@
             return {
                 tableData: [{client_name: 'ssh'}],
                 dialogFormVisible: false,
+                showConfigDialog: false,
                 formLabelWidth: '120px',
                 form: {
                     client_name: '',
@@ -133,6 +157,10 @@
                     local_ip: '127.0.0.1',
                     remote_port: '',
                     speed_limit: 0
+                },
+                form1: {
+                    client_name: '',
+                    result: ''
                 },
                 intervalTask: ''
 
@@ -174,7 +202,7 @@
                 this.dialogFormVisible = true
             },
             submitAddOrEdit() {
-                var url = window.location.href.split('?')[0] + '/api'
+                var url = window.location.href.split('?')[0] + '/api/edit_or_create'
 
                 console.log(this.form)
                 axios.post(url, this.form).then(res => {
@@ -189,7 +217,7 @@
                 })
             },
             handleDelete(client_name, name) {
-                var url = window.location.href.split('?')[0] + '/api'
+                var url = window.location.href.split('?')[0] + '/api/delete_config'
                 const params = {
                     client_name: client_name,
                     name: name
@@ -216,11 +244,10 @@
 
             },
             getClientList() {
-                var url = window.location.href.split('?')[0] + '/api'
+                var url = window.location.href.split('?')[0] + '/api/get_list'
                 axios.get(url, {
                     headers: {token: localStorage.getItem('token')}
                 }).then(res => {
-                    console.log(res)
                     const code = res.data.code
                     if (code !== 200) {
                         this.$message.error(res.data.msg)
@@ -231,13 +258,53 @@
                         }
                     }
                     this.tableData = res.data.data
-                    console.log(this.tableData)
                 }).catch(err => {
                     console.log(err)
                     this.$message.error(err)
                     // alert('服务器出现错误')
                 })
+            },
+            clickShowConfigDialog() {
+                this.form1.client_name = ''
+                this.form1.result = ''
+                this.showConfigDialog = true
+            },
+            get_client_config() {
+                let websocket_path = window.location.pathname.replace(/(.*)\/admin/,'$1')  // 把admin去掉
+                const base_url = window.location.href.split('?')[0]
+                const client_name = this.form1.client_name
+                var url = base_url + '/api/get_client_password?client_name=' + client_name
+                axios.get(url, {
+                    headers: {token: localStorage.getItem('token')}
+                }).then(res => {
+                    const code = res.data.code
+                    if (code !== 200) {
+                        this.$message.error(res.data.msg)
+                    }
+                    // 生成配置
+                    const https = 'https:'
+                    const protocol = location.protocol;
+                    const defaultPort = protocol === https ? '443' : '80'
+                    const domain = location.hostname;
+                    const port = location.port || defaultPort
+                    const jsonContent = {
+                        "server": {
+                            "port": port,
+                            "host": domain,
+                            "https": protocol === https,
+                            "password": res.data.data,
+                            "path": websocket_path
+                        },
+                        "client_name": client_name
+                    }
+                    this.form1.result = JSON.stringify(jsonContent,  null, "  ")
+                    console.log(JSON.stringify(jsonContent));
+                }).catch(err => {
+                    console.log(err)
+                    this.$message.error(err)
+                })
             }
+
         }
     })
 </script>

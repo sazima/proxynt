@@ -3,10 +3,11 @@ import json
 import os
 import time
 import traceback
-from typing import List, Set, Tuple
+from typing import List, Set, Tuple, Any
 
 from tornado.web import RequestHandler
 
+from common.encrypt_utils import EncryptUtils
 from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
@@ -15,44 +16,11 @@ from entity.server_config_entity import ServerConfigEntity
 from server.tcp_forward_client import TcpForwardClient
 from server.websocket_handler import MyWebSocketaHandler
 
+from tornado_request_mapping import request_mapping
 # todo: 身份认证
 COOKIE_KEY = 'c'
 MIN_PORT = 1000
 NOT_LOGIN = 401
-
-
-class AdminHtmlHandler(RequestHandler):
-    async def get(self):
-        result = self.get_cookie(COOKIE_KEY)
-        cookie_dict = ContextUtils.get_cookie_to_time()
-        if result in cookie_dict and time.time() - cookie_dict[result] < SystemConstant.COOKIE_EXPIRE_SECONDS:
-            self.render('ele_index.html')
-        else:
-            self.render('login.html')
-
-    async def post(self):
-        try:
-            body_data = json.loads(self.request.body)
-            password = body_data['password']
-            admin_config = ContextUtils.get_admin_config()
-            if admin_config and admin_config['admin_password'] == password:
-                cookie_value = base64.b64encode(os.urandom(64)).decode()
-                cookie_dict = ContextUtils.get_cookie_to_time()
-                cookie_dict[cookie_value] = time.time()
-                self.set_cookie(COOKIE_KEY, cookie_value)
-                self.write({
-                    'code': 200,
-                    'data': '',
-                    'msg': ''
-                })
-            else:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': '密码错误'
-                })
-        except Exception:
-            LoggerFactory.get_logger().error(traceback.format_exc())
 
 
 class ShowVariableHandler(RequestHandler):
@@ -65,18 +33,39 @@ class ShowVariableHandler(RequestHandler):
         })
 
 
+@request_mapping('')
 class AdminHttpApiHandler(RequestHandler):
-    async def get(self):
+    @request_mapping('')
+    async def get_page(self):
+        result = self.get_cookie(COOKIE_KEY)
+        cookie_dict = ContextUtils.get_cookie_to_time()
+        if result in cookie_dict and time.time() - cookie_dict[result] < SystemConstant.COOKIE_EXPIRE_SECONDS:
+            self.render('ele_index.html')
+        else:
+            self.render('login.html')
+
+    @request_mapping('/login', method='post')
+    async def login(self):
         try:
-            cookie_dict = ContextUtils.get_cookie_to_time()
-            result = self.get_cookie(COOKIE_KEY)
-            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
-                self.write({
-                    'code': NOT_LOGIN,
-                    'data': '',
-                    'msg': '登录信息已经过期, 请重新刷新页面'
-                })
-                return
+            body_data = json.loads(self.request.body)
+            password = body_data['password']
+            admin_config = ContextUtils.get_admin_config()
+            if admin_config and admin_config['admin_password'] == password:
+                cookie_value = base64.b64encode(os.urandom(64)).decode()
+                cookie_dict = ContextUtils.get_cookie_to_time()
+                cookie_dict[cookie_value] = time.time()
+                self.set_cookie(COOKIE_KEY, cookie_value)
+                return self._send_success()
+            else:
+                return self._send_fail('密码错误')
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+
+    @request_mapping('/api/get_list')
+    async def get_list(self):
+        try:
+            if not self._check_login():
+                return self._send_fail('登录信息已经过期, 请重新刷新页面', NOT_LOGIN)
             online_client_name_list: List[str] = list(MyWebSocketaHandler.client_name_to_handler.keys())
             return_list = []
             client_name_to_config_list_in_server = ContextUtils.get_client_name_to_config_in_server()
@@ -111,38 +100,23 @@ class AdminHttpApiHandler(RequestHandler):
                     'can_delete_names': [x['name'] for x in client_name_to_config_list_in_server.get(client_name, [])]
                 })
             return_list.sort(key=lambda x: x['client_name'])
-            self.write({
-                'code': 200,
-                'data': return_list,
-                'msg': ''
-            })
+            return self._send_success(return_list)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
-    def delete(self, *args, **kwargs):
+    @request_mapping('/api/delete_config', method='delete')
+    def delete_config(self, *args, **kwargs):
         """删除"""
         try:
-            # request_data = json.loads(self.request.body)
-            cookie_dict = ContextUtils.get_cookie_to_time()
-            result = self.get_cookie(COOKIE_KEY)
-            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
-                self.write({
-                    'code': NOT_LOGIN,
-                    'data': '',
-                    'msg': '登录信息已经过期, 请重新刷新页面'
-                })
-                return
+            if not self._check_login():
+                return self._send_fail('登录信息已经过期, 请重新刷新页面', NOT_LOGIN)
             online_client_name_list: List[str] = list(MyWebSocketaHandler.client_name_to_handler.keys())
             client_name = self.get_argument('client_name')
             name = self.get_argument('name')
             LoggerFactory.get_logger().info(f'delete {client_name}, {name}')
             if not client_name or not name:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': 'client ,name 不能为空'
-                })
-                return
+                return self._send_fail('client ,name 不能为空')
+
             client_to_server_config = ContextUtils.get_client_name_to_config_in_server()
             old_config = client_to_server_config[client_name]
             new_config = [x for x in old_config if x['name'] != name]
@@ -150,29 +124,19 @@ class AdminHttpApiHandler(RequestHandler):
                 client_to_server_config.pop(client_name)
             else:
                 client_to_server_config[client_name] = new_config
-            self.write({
-                'code': 200,
-                'data': '',
-                'msg': ''
-            })
+            self._send_success()
             self.update_config_file()
             if client_name in MyWebSocketaHandler.client_name_to_handler:
                 MyWebSocketaHandler.client_name_to_handler[client_name].close(0, 'close by server')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
-    async def post(self):
+    @request_mapping('/api/edit_or_create', method='post')
+    async def edit_or_create(self):
         """新增  或 编辑"""
         try:
-            cookie_dict = ContextUtils.get_cookie_to_time()
-            result = self.get_cookie(COOKIE_KEY)
-            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
-                self.write({
-                    'code': NOT_LOGIN,
-                    'data': '',
-                    'msg': '登录信息已经过期, 请重新刷新页面'
-                })
-                return
+            if not self._check_login():
+                return self._send_fail('登录信息已经过期, 请重新刷新页面', NOT_LOGIN)
             request_data = json.loads(self.request.body)
             LoggerFactory.get_logger().info(f'add config {request_data}')
             client_name = request_data.get('client_name')
@@ -183,69 +147,45 @@ class AdminHttpApiHandler(RequestHandler):
             local_port = int(request_data.get('local_port'))
             speed_limit = float(request_data.get('speed_limit'))
             if not client_name:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': 'client name 不能为空'
-                })
-                return
+                msg = 'client name 不能为空'
+                return self._send_fail(msg)
             if not remote_port:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': '远程ip不能为空'
-                })
-                return
+                msg = '远程ip不能为空'
+                return self._send_fail(msg)
             if speed_limit < 0:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': '限速必须大于等于0'
-                })
-                return
+                msg = '限速必须大于等于0'
+                return self._send_fail(msg)
             if not local_ip:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': '必填local_ip'
-                })
-                return
+                msg = '必填local_ip'
+                return self._send_fail(msg)
             if not local_port or (local_port <= 0 or local_port > 65535):
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': '本地port不合法'
-                })
-                return
+                msg = '本地port不合法'
+                return self._send_fail(msg)
             if remote_port < MIN_PORT:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': f'端口最小为 {MIN_PORT}, 请更换端口'
-                })
-                return
+                msg = f'端口最小为 {MIN_PORT}, 请更换端口'
+                return self._send_fail(msg)
             if not is_edit:
                 is_ok, msg = self._add(client_name, name, remote_port, local_port, local_ip, speed_limit)
             else:
                 is_ok, msg = self._edit(client_name, name, remote_port, local_port, local_ip, speed_limit)
             if not is_ok:
-                self.write({
-                    'code': 400,
-                    'data': '',
-                    'msg': msg
-                })
-                return
+                return self._send_fail(msg)
             if client_name in MyWebSocketaHandler.client_name_to_handler:
                 MyWebSocketaHandler.client_name_to_handler[client_name].close(0, 'close by server')
-            self.write({
-                'code': 200,
-                'data': '',
-                'msg': '成功'
-            })
+            self._send_success()
             self.update_config_file()
             return
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
+
+    @request_mapping('/api/get_client_password')
+    async def get_client_password(self):
+        """获取客户端专属密码"""
+        if not self._check_login():
+            return self._send_fail('登录信息已经过期, 请重新刷新页面', NOT_LOGIN)
+        client_name = self.get_argument('client_name')
+        client_password = EncryptUtils.md5_hash(f'{client_name}_{ContextUtils.get_password()}'.encode()).hex()
+        return self._send_success(client_password)
 
     def _edit(self, client_name: str, name: str, remote_port: int, local_port: int, local_ip: str, speed_limit: float) -> Tuple[bool, str]:
         client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
@@ -303,3 +243,22 @@ class AdminHttpApiHandler(RequestHandler):
         import socket
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(('localhost', port)) == 0
+
+    def _check_login(self) -> bool:
+        cookie_dict = ContextUtils.get_cookie_to_time()
+        result = self.get_cookie(COOKIE_KEY)
+        return result in cookie_dict and time.time() - cookie_dict[result] <= SystemConstant.COOKIE_EXPIRE_SECONDS
+
+    def _send_success(self, data: Any=''):
+        self.write({
+            'code': 200,
+            'data': data,
+            'msg': '成功'
+        })
+
+    def _send_fail(self, msg: str, code= 400):
+        self.write({
+            'code': code,
+            'data': '',
+            'msg': msg
+        })
