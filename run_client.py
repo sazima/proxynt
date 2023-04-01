@@ -207,6 +207,7 @@ def run_client(ws: websocket.WebSocketApp):
 def main():
     print('github: ', SystemConstant.GITHUB)
     config_data = get_config()
+    client_name = config_data['client_name']
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)
     server_config = config_data['server']
@@ -220,7 +221,7 @@ def main():
         url += 'wss://'
     else:
         url += 'ws://'
-    url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}"
+    url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}?client_name={client_name}"
     LoggerFactory.get_logger().info(f'start open {url}')
     ws = websocket.WebSocketApp(url)
     forward_client = TcpForwardClient(ws)

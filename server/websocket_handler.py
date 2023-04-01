@@ -12,6 +12,7 @@ from typing import List, Dict, Set, Tuple
 from tornado.ioloop import IOLoop
 from tornado.websocket import WebSocketHandler
 
+from common.encrypt_utils import EncryptUtils
 from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
 from constant.message_type_constnat import MessageTypeConstant
@@ -32,8 +33,7 @@ class MyWebSocketaHandler(WebSocketHandler):
     push_config: PushConfigEntity
     names: Set[str]
     recv_time: float = None
-
-    # handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
+    client_password: str = None
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock = Lock()
 
@@ -59,14 +59,25 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     async def on_message_async(self, message):
         tcp_forward_client = TcpForwardClient.get_instance()
+        client_name_in_argument: str = self.get_argument('client_name', '')
         try:
-            message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
+            if not self.client_password:
+                client_password = EncryptUtils.md5_hash(f'{client_name_in_argument}_{ContextUtils.get_password()}'.encode()).hex()
+                try:
+                    message_dict: MessageEntity = NatSerialization.loads(message, client_password)
+                    self.client_password = client_password
+                except (json.decoder.JSONDecodeError, SignatureError):
+                    message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
+                    self.client_password = ContextUtils.get_password()
+            else:
+                message_dict: MessageEntity = NatSerialization.loads(message, self.client_password)
         except json.decoder.JSONDecodeError:
             self.close(reason='invalid password')
             raise InvalidPassword()
         except SignatureError:
             self.close(reason='SignatureError')
             raise
+
         except ReplayError:
             self.close(reason='ReplayError')
             raise
@@ -81,6 +92,10 @@ class MyWebSocketaHandler(WebSocketHandler):
                     LoggerFactory.get_logger().info(f'get push config: {message_dict}')
                     push_config: PushConfigEntity = message_dict['data']
                     client_name = push_config['client_name']
+                    if client_name_in_argument and client_name_in_argument != client_name:
+                        self.close(None, 'ClientNameError')  # 未知错误, 解密出来的客户端和url中的客户端不一致
+                        raise InvalidPassword()
+
                     self.version = push_config.get('version')
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
                     if client_name in self.client_name_to_handler:
@@ -96,7 +111,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 raise DuplicatedName()
                         data.extend(client_name_to_config_in_server[client_name])
                     key = push_config['key']
-                    if key != ContextUtils.get_password():
+                    if key != self.client_password:
                         self.close(reason='invalid password')
                         raise InvalidPassword()
 
