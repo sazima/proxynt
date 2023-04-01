@@ -28,3 +28,4 @@ if __name__ == '__main__':
     print(res)
     res = EncryptUtils.decrypt(res, KEY)
     print(res)
+    print(EncryptUtils.md5_hash('hello'.encode()).hex())

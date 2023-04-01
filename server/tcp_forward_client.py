@@ -145,7 +145,7 @@ class TcpForwardClient:
         try:
 
             self.tornado_loop.add_callback(
-                partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True)
+                partial(handler.write_message, NatSerialization.dumps(send_message, handler.client_password)), True)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
@@ -192,7 +192,7 @@ class TcpForwardClient:
         s = self.uid_to_listen_socket_server[uid]
         handler = self.listen_socket_server_to_handler[s]
         self.tornado_loop.add_callback(
-            partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True
+            partial(handler.write_message, NatSerialization.dumps(send_message, handler.client_password)), True
         )
 
     async def send_to_socket(self, uid: bytes, message: bytes):
