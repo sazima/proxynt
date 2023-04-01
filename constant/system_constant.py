@@ -1,5 +1,5 @@
 class SystemConstant:
-    CHUNK_SIZE = 65536 * 8
+    CHUNK_SIZE = 65536 * 1
     DEFAULT_TIMEOUT = 0.5
 
     HEART_BEAT_INTERVAL = 15
