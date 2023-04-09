@@ -129,8 +129,8 @@
             <el-form-item label="客户端名称" :label-width="formLabelWidth" >
                 <el-input v-model="form1.client_name" autocomplete="off" :disabled="form.is_edit"></el-input>
             </el-form-item>
-            <el-form-item label="结果" prop="desc"  :label-width="formLabelWidth">
-                <el-input type="textarea" v-model="form1.result" rows="11"></el-input>
+            <el-form-item label="生成配置" prop="desc"  :label-width="formLabelWidth">
+                <el-input type="textarea" v-model="form1.result" rows="11"  :disabled="form1.result === '' "></el-input>
             </el-form-item>
         </el-form>
 
@@ -297,6 +297,7 @@
                         },
                         "client_name": client_name
                     }
+                    this.$message.success('请复制生成的客户端配置')
                     this.form1.result = JSON.stringify(jsonContent,  null, "  ")
                     console.log(JSON.stringify(jsonContent));
                 }).catch(err => {
