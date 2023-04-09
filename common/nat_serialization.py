@@ -64,15 +64,15 @@ class NatSerialization:
 
     @classmethod
     def check_nonce_and_timestamp(cls, clear_text: bytes) -> bool:
-        nonce = clear_text[5:10]
-        timestamp = struct.unpack('I', clear_text[10:14])[0]
-        nonce_to_time = ContextUtils.get_nonce_to_time()
-        if nonce in nonce_to_time :
-            return False
-        # if nonce in nonce_to_time or time.time() - timestamp > SystemConstant.MAX_TIME_DIFFERENCE: # 因为物联网设备的时间不一定准 所以先不校验
-        #     return False
-        nonce_to_time[nonce] = int(time.time())
         return True
+        # check and Anti replay attack
+        # nonce = clear_text[5:10]
+        # timestamp = struct.unpack('I', clear_text[10:14])[0]
+        # nonce_to_time = ContextUtils.get_nonce_to_time()
+        # if nonce in nonce_to_time :
+        #     return False
+        # nonce_to_time[nonce] = int(time.time())
+        # return True
 
     @classmethod
     def loads(cls, byte_data: bytes, key: str) -> MessageEntity:
