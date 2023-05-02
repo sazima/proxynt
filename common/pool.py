@@ -3,7 +3,6 @@ import threading
 import time
 from selectors import DefaultSelector, EVENT_READ
 
-import select
 import socket
 import traceback
 from typing import Dict, List, Set
@@ -15,22 +14,6 @@ from constant.system_constant import SystemConstant
 """
 这里只监听了 socket  的可读状态 
 """
-
-
-
-    # def register(self, s: socket.socket):
-    #     self.fileno_to_client[s.fileno()] = s
-    #
-    # def unregister(self, s: socket.socket):
-    #     if s.fileno() in self.fileno_to_client:
-    #         self.fileno_to_client.pop(s.fileno())
-    #
-
-    # def run(self):
-    #     raise NotImplemented()
-
-
-
 class SelectPool:
 
     def __init__(self):
@@ -118,7 +101,11 @@ class SelectPool:
                         LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
                         continue
                     data: ResisterAppendData = key.data
-                    data.callable_(client, data)
+                    try:
+                        data.callable_(client, data)
+                    except Exception:
+                        LoggerFactory.get_logger().error(traceback.format_exc())
+                        continue
                     # self.call_back_function[0](client)
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
