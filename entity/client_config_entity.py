@@ -2,6 +2,8 @@ from typing import List
 
 from typing_extensions import TypedDict
 
+from entity.message.push_config_entity import ClientData
+
 
 class _ServerEntity(TypedDict):
     port: int
@@ -12,16 +14,8 @@ class _ServerEntity(TypedDict):
     path: str
 
 
-class _ClientEntity(TypedDict):
-    name: str
-    remote_port: int
-    local_port: int
-    local_ip: str
-    speed_limit: float
-
-
 class ClientConfigEntity(TypedDict):
     server: _ServerEntity
-    client: List[_ClientEntity]
+    client: List[ClientData]
     log_file: str
     client_name: str
