@@ -45,8 +45,9 @@ class TcpForwardClient:
             recv = each.recv(data.read_size)
             if data.speed_limiter:
                 data.speed_limiter.add(len(recv))
-        except OSError:
-            return
+        except OSError as e:
+            LoggerFactory.get_logger().warn('get os error: {str(e)}, close')
+            recv = b''
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
