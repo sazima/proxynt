@@ -6,19 +6,6 @@
     "password": "helloworld",
     "path": "/websocket_path"
   },
-  "client": [
-    {
-      "name": "ssh",
-      "remote_port": 1222,
-      "local_port": 22,
-      "local_ip": "127.0.0.1"
-    },
-    {
-      "name": "mongo",
-      "remote_port": 1223,
-      "local_port": 27017,
-      "local_ip": "127.0.0.1"
-    }
-  ],
+  "client_name": "windows10_sql",
   "log_file": "/var/log/nt/nt.log"
 }
