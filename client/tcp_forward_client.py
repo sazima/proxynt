@@ -1,7 +1,5 @@
-import asyncio
 import logging
 import socket
-import threading
 import time
 import traceback
 from threading import Lock
@@ -14,17 +12,23 @@ from common.pool import SelectPool
 from common.register_append_data import ResisterAppendData
 from common.speed_limit import SpeedLimiter
 from constant.message_type_constnat import MessageTypeConstant
-from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
 
+class PrivateSocketConnection:
+    """连接内网端口的客户端"""
+
+    def __init__(self, uid: bytes, s: socket.socket, name: str):
+        self.uid: bytes = uid
+        self.socket: socket.socket = s
+        self.name: str = name
+
+
 class TcpForwardClient:
     def __init__(self, ws: websocket):
-        self.uid_to_socket: Dict[bytes, socket.socket] = dict()
-        self.socket_to_uid: Dict[socket.socket, bytes] = dict()
-        # self.name_to_addr: Dict[str, Tuple[str, int]] = name_to_addr
-        self.uid_to_name: Dict[bytes, str] = dict()
+        self.uid_to_socket_connection: Dict[bytes, PrivateSocketConnection] = dict()
+        self.socket_to_socket_connection: Dict[socket.socket, PrivateSocketConnection] = dict()
         self.is_running = True
         self.ws = ws
         self.lock = Lock()
@@ -36,7 +40,7 @@ class TcpForwardClient:
         self.socket_event_loop.run()
 
     def handle_message(self, each: socket.socket, data: ResisterAppendData):
-        uid = self.socket_to_uid[each]
+        connection = self.socket_to_socket_connection[each]
         if data.speed_limiter and data.speed_limiter.is_exceed()[0]:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug('over speed')
@@ -51,9 +55,9 @@ class TcpForwardClient:
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
-                'name': self.uid_to_name[uid],
+                'name': connection.name,
                 'data': recv,
-                'uid': uid,
+                'uid': connection.uid,
                 'ip_port': ''  # 这个对服务端没有用, 因此写了个空
             }
         }
@@ -67,45 +71,59 @@ class TcpForwardClient:
             except Exception:
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
 
-    def create_socket(self, name: str, uid: bytes, ip_port: str, speed_limiter: SpeedLimiter):
-        if uid in self.uid_to_socket:
-            return
+    def create_socket(self, name: str, uid: bytes, ip_port: str, speed_limiter: SpeedLimiter) -> bool:
+        if uid in self.uid_to_socket_connection:
+            return True
+        connection = None
         with self.lock:
-            if uid in self.uid_to_socket:  # 再次判断
-                return
+            if uid in self.uid_to_socket_connection:  # 再次判断
+                return True
             try:
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(5)
+
+                connection = PrivateSocketConnection(uid, s, name)
+                self.socket_to_socket_connection[s] = connection
                 ip, port = ip_port.split(':')
-                s.connect((ip, int(port)))
-                self.uid_to_socket[uid] = s  #
-                self.uid_to_name[uid] = name
-                self.socket_to_uid[s] = uid
+                try:
+                    s.connect((ip, int(port)))
+                except OSError as e:
+                    LoggerFactory.get_logger().info(f'connection error, {e}')
+                    self.close_connection(s)
+                    self.close_remote_socket(connection)
+                    return False
+                self.uid_to_socket_connection[uid] = connection
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'register socket {name}, {uid}')
                 self.socket_event_loop.register(s, ResisterAppendData(self.handle_message, speed_limiter))
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'register socket success {name}, {uid}')
+                return True
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
-                self.close_remote_socket(uid, name)
+                if connection:
+                    self.close_remote_socket(connection)
+                return False
 
     def close_connection(self, socket_client: socket.socket):
         LoggerFactory.get_logger().info(f'close {socket_client}')
-        if socket_client in self.socket_to_uid:
-            uid = self.socket_to_uid.pop(socket_client)
-            self.uid_to_socket.pop(uid)
+        if socket_client in self.socket_to_socket_connection:
+            connection: PrivateSocketConnection = self.socket_to_socket_connection.pop(socket_client)
             self.socket_event_loop.unregister(socket_client)
             socket_client.close()
             LoggerFactory.get_logger().info(f'close success {socket_client}')
+            if connection.uid in self.uid_to_socket_connection:
+                self.uid_to_socket_connection.pop(connection.uid)
+            self.close_remote_socket(connection)
 
     def close(self):
         with self.lock:
             self.socket_event_loop.stop()
-            for uid, s in self.uid_to_socket.items():
+            for uid, c in self.uid_to_socket_connection.items():
                 try:
+                    s = c.socket
                     s.close()
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
@@ -113,20 +131,22 @@ class TcpForwardClient:
                     self.socket_event_loop.unregister(s)
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
-            self.uid_to_socket.clear()
-            self.socket_to_uid.clear()
-            self.uid_to_name.clear()
+            self.uid_to_socket_connection.clear()
+            self.socket_to_socket_connection.clear()
             self.is_running = False
 
-    def close_remote_socket(self, uid: bytes, name: str = None):
-        if name is None:
-            name = self.uid_to_name.get(uid, '')
+    def close_remote_socket(self, connection: PrivateSocketConnection):
+        # if name is None:
+        #     connection = self.uid_to_socket_connection.get(uid)
+        #     if not connection:
+        #         return
+        name = connection.name
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
                 'name': name,
                 'data': b'',
-                'uid': uid,
+                'uid': connection.uid,
                 'ip_port': ''
             }
         }
@@ -134,11 +154,14 @@ class TcpForwardClient:
         self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
         LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
 
-    def send_by_uid(self, uid, msg: bytes):
+    def send_by_uid(self, uid: bytes, msg: bytes):
+        connection = self.uid_to_socket_connection.get(uid)
+        if not connection:
+            return
         try:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'send to {uid}, {len(msg)}')
-            s = self.uid_to_socket[uid]
+            s = self.uid_to_socket_connection[uid].socket
             s.sendall(msg)
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'send success to {uid}, {len(msg)}')
@@ -147,5 +170,4 @@ class TcpForwardClient:
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
             # 出错后, 发送空, 服务器会关闭
-            self.close_remote_socket(uid)
-
+            self.close_remote_socket(connection)

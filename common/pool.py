@@ -14,6 +14,8 @@ from constant.system_constant import SystemConstant
 """
 这里只监听了 socket  的可读状态 
 """
+
+
 class SelectPool:
 
     def __init__(self):
@@ -33,6 +35,7 @@ class SelectPool:
 
     def unregister_and_register_delay(self, s: socket.socket, data: ResisterAppendData, delay_time: int):
         """取消注册, 并在指定秒后注册"""
+
         def _register_again():
             try:
                 if s not in self.socket_to_lock:
@@ -49,7 +52,7 @@ class SelectPool:
                         self.waiting_register_socket.remove(s)
                         self.register(s, data)
             except Exception:
-                LoggerFactory.get_logger().error(traceback.format_exc() )
+                LoggerFactory.get_logger().error(traceback.format_exc())
                 raise
 
         if s in self.waiting_register_socket:  # 不在等待列表中
@@ -65,6 +68,9 @@ class SelectPool:
             threading.Timer(delay_time, _register_again).start()
 
     def unregister(self, s: socket.socket):
+        if s not in self.socket_to_lock:
+            LoggerFactory.get_logger().info('not register socket, skip')
+            return
         with self.socket_to_lock[s]:
             if s in self.waiting_register_socket:
                 self.waiting_register_socket.remove(s)
