@@ -129,8 +129,9 @@ class WebsocketClient:
                 uid = data['uid']
                 name = data['name']
                 b = data['data']
-                self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
-                self.forward_client.send_by_uid(uid, b)
+                create_result = self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
+                if create_result:
+                    self.forward_client.send_by_uid(uid, b)
             elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']

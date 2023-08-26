@@ -22,31 +22,49 @@ from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
+from entity.message.push_config_entity import ClientData
+
+
+class PublicSocketServer:
+    """在公网上监听的端口"""
+
+    def __init__(self, s: socket.socket, name: str, ip_port: str, websocket_handler: 'MyWebSocketaHandler', speed_limit_size: float):
+        self.socket_server = s
+        self.name: str = name
+        self.ip_port: str = ip_port
+        self.websocket_handler = websocket_handler
+        self.speed_limit_size: float = speed_limit_size
+        self.client_set: Set['PublicSocketConnection'] = set()
+
+    def add_client(self, client: 'PublicSocketConnection'):
+        self.client_set.add(client)
+
+    def delete_client(self, client: 'PublicSocketConnection'):
+        self.client_set.remove(client)
+
+
+class PublicSocketConnection:
+    """对应连接公网端口的客户端"""
+
+    def __init__(self, uid: bytes, s: socket.socket, socket_server: PublicSocketServer):
+        self.uid: bytes = uid
+        self.socket: socket.socket = s
+        self.socket_server = socket_server
+        self.socket_server.add_client(self)
 
 
 class TcpForwardClient:
     _instance = None
 
-    def __init__(self,  loop, tornado_loop):
-        self.socket_event_loop =  SelectPool()
-        self.uid_to_client: Dict[bytes, socket.socket] = dict()   # uid 对应的连接公网端口的客户端
-        self.client_to_uid: Dict[socket.socket, bytes] = dict()  # 连接公网端口的客户端 对应的uid
-        self.uid_to_name_ip_port : Dict[bytes, Tuple[str, str]]  = dict()  # uid 对应的内网ipport
-
-        self.uid_to_listen_socket_server: Dict[bytes, socket.socket]  = dict()  # uid对应的监听socket
-
-        self.listen_socket_server_to_name_ip_port: Dict[socket.socket, Tuple[str, str]]  = dict()
-
-        self.listen_socket_server_to_handler: Dict[socket.socket, 'MyWebSocketaHandler']  = dict()
-
-        self.listen_socket_server_to_uid_set: Dict[socket.socket, Set] = defaultdict(set)
-        self.client_name_to_listen_socket_server: Dict[str, List[socket.socket]] = defaultdict(list)
-
+    def __init__(self, loop, tornado_loop):
+        self.socket_event_loop = SelectPool()
+        self.listen_socket_to_public_server: Dict[socket.socket, PublicSocketServer] = dict()
+        self.client_name_to_public_server_set: Dict[str, Set[PublicSocketServer]] = defaultdict(set)
+        self.uid_to_connection: Dict[bytes, PublicSocketConnection] = dict()  # uid 对应的连接公网端口的客户端
+        self.socket_to_connection: Dict[socket.socket, PublicSocketConnection] = dict()
         self.tornado_loop = tornado_loop
         self.close_lock = Lock()
-
         self.client_name_to_lock: Dict[str, AsyncioLock] = dict()
-        # self.socket_event_loop.add_callback_function(self.handle_message)
 
     @classmethod
     def get_instance(cls) -> 'TcpForwardClient':
@@ -60,56 +78,42 @@ class TcpForwardClient:
         if client_name not in self.client_name_to_lock:
             self.client_name_to_lock[client_name] = AsyncioLock()
         async with self.client_name_to_lock.get(client_name):
-            self.listen_socket_server_to_name_ip_port[s] = (name, ip_port)
-            self.listen_socket_server_to_handler[s] = websocket_handler
-            self.client_name_to_listen_socket_server[client_name].append(s)
             append_data = ResisterAppendData(self.start_accept, SpeedLimiter(speed_limit_size) if speed_limit_size else None)
+            server = PublicSocketServer(s, name, ip_port, websocket_handler, speed_limit_size)
+            self.listen_socket_to_public_server[s] = server
+            self.client_name_to_public_server_set[client_name].add(server)
             self.socket_event_loop.register(s, append_data)
 
     async def close_by_client_name(self, client_name: str):
-        if client_name not in self.client_name_to_listen_socket_server:
+        if client_name not in self.client_name_to_public_server_set:
             return
         if client_name not in self.client_name_to_lock:
             self.client_name_to_lock[client_name] = AsyncioLock()
         async with self.client_name_to_lock.get(client_name):
-            client_socket_list = []
+            client_connection_list: List[PublicSocketConnection] = []
             server_socket_list = []
-            uid_list = []
 
-            for server in self.client_name_to_listen_socket_server[client_name]:
-                if server in self.listen_socket_server_to_uid_set:
-                    for uid in self.listen_socket_server_to_uid_set[server]:
-                        uid_list.append(uid)
-                        if uid in self.uid_to_client:
-                            client_socket_list.append(self.uid_to_client[uid])
+            for server in self.client_name_to_public_server_set[client_name]:
+                for c in server.client_set:
+                    client_connection_list.append(c)
                 server_socket_list.append(server)
-            for c in client_socket_list:
-                c.close()
-                self.socket_event_loop.unregister(c)
-                self.client_to_uid.pop(c)
+            for c in client_connection_list:
+                c.socket.close()
+                self.socket_event_loop.unregister(c.socket)
+                self.socket_to_connection.pop(c.socket)
+                self.uid_to_connection.pop(c.uid)
             for s in server_socket_list:
-                self.listen_socket_server_to_name_ip_port.pop(s)
-                if s in self.listen_socket_server_to_uid_set:
-                    self.listen_socket_server_to_uid_set.pop(s)
-                self.listen_socket_server_to_handler.pop(s)
+                self.listen_socket_to_public_server.pop(s.socket_server)
                 try:
-                    self.socket_event_loop.unregister(s)
-                    s.shutdown(socket.SHUT_RDWR)
+                    self.socket_event_loop.unregister(s.socket_server)
+                    s.socket_server.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
-                s.close()
-            for u in uid_list:
-                if u in self.uid_to_client:
-                    self.uid_to_client.pop(u)
-                if u in self.uid_to_listen_socket_server:
-                    self.uid_to_listen_socket_server.pop(u)
-                if u in self.uid_to_name_ip_port:
-                    self.uid_to_name_ip_port.pop(u)
-            self.client_name_to_listen_socket_server.pop(client_name)
-            self.client_name_to_lock.pop(client_name)
-        # self.client_name_to_lock.o
+                s.socket_server.close()
+            self.client_name_to_public_server_set.pop(client_name)
+        self.client_name_to_lock.pop(client_name)
 
-    def handle_message(self, each: socket.socket,  data: ResisterAppendData):
+    def handle_message(self, each: socket.socket, data: ResisterAppendData):
         # 发送到websocket
         each: socket.socket
         if data.speed_limiter and data.speed_limiter.is_exceed()[0]:
@@ -123,109 +127,94 @@ class TcpForwardClient:
         except ConnectionResetError:
             recv = b''
         # client = self.uid_to_client[uid]
-        uid = self.client_to_uid[each]
-        name, ip_port = self.uid_to_name_ip_port[uid]
+        socket_connection = self.socket_to_connection[each]
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
-                'name': name,
+                'name': socket_connection.socket_server.name,
                 'data': recv,
-                'uid': uid,
-                'ip_port': ip_port
+                'uid': socket_connection.uid,
+                'ip_port': socket_connection.socket_server.ip_port
             }
         }
-        s = self.uid_to_listen_socket_server[uid]
-        handler = self.listen_socket_server_to_handler[s]
         if not recv:
             LoggerFactory.get_logger().info('recv empty, close')
             try:
-                self.close_connection(each)
+                self.close_connection(socket_connection)
             except (OSError, ValueError, KeyError):
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
         try:
 
             self.tornado_loop.add_callback(
-                partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True)
+                partial(socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
-    def start_accept(self, s: socket, register_append_data: ResisterAppendData):
-        # LoggerFactory.get_logger().info(f'start accept {self.listen_port}')
-        # self.socket_event_loop.is_running = True
-        # Thread(target=self.socket_event_loop.run).start()
-        # while self.is_running:
-        #     rs, ws, es = select.select([self.socket], [self.socket], [self.socket])
-        #     for each in rs:
-        #         if self.socket is None:
-        #             continue
+    def start_accept(self, server_socket: socket, register_append_data: ResisterAppendData):
         try:
-            client, address = s.accept()
+            client, address = server_socket.accept()
+            client: socket.socket
         except OSError:
             return
         LoggerFactory.get_logger().info(f'get connect : {address}')
+        server = self.listen_socket_to_public_server[server_socket]
         # 当前 服务端的client 也会对应服务端连接内网服务的一个 client
         uid = os.urandom(4)
-        handler = self.listen_socket_server_to_handler[s]
-        self.listen_socket_server_to_uid_set[s].add(uid)
-        self.uid_to_client[uid] = client
-        self.client_to_uid[client] = uid
-        self.uid_to_listen_socket_server[uid] = s
-        name, ip_port = self.listen_socket_server_to_name_ip_port[s]
-        self.uid_to_name_ip_port[uid] = (name, ip_port)
-        Thread(target=self.request_to_connect, args=(uid, )).start()
+        client_socket_connection = PublicSocketConnection(uid, client, server)
+        self.uid_to_connection[uid] = client_socket_connection
+        self.socket_to_connection[client] = client_socket_connection
+        Thread(target=self.request_to_connect, args=(client_socket_connection,)).start()
         append_data = ResisterAppendData(self.handle_message, register_append_data.speed_limiter)
         self.socket_event_loop.register(client, append_data)
 
-    def request_to_connect(self, uid: bytes):
+    def request_to_connect(self, client_socket_connection: PublicSocketConnection):
         """请求连接客户端"""
-        client = self.uid_to_client[uid]
-        name, ip_port = self.uid_to_name_ip_port[uid]
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.REQUEST_TO_CONNECT,
             'data': {
-                'name': name,
+                'name': client_socket_connection.socket_server.name,
                 'data': ''.encode(),
-                'uid': uid,
-                'ip_port': ip_port
+                'uid': client_socket_connection.uid,
+                'ip_port': client_socket_connection.socket_server.ip_port
             }
         }
-        s = self.uid_to_listen_socket_server[uid]
-        handler = self.listen_socket_server_to_handler[s]
         self.tornado_loop.add_callback(
-            partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True
+            partial(client_socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True
         )
 
     async def send_to_socket(self, uid: bytes, message: bytes):
         send_start_time = time.time()
-        if uid not in self.uid_to_client:
+        if uid not in self.uid_to_connection:
             LoggerFactory.get_logger().debug(f'{message}, {uid} not in ')
             return
-        socket_client = self.uid_to_client[uid]
+        connection = self.uid_to_connection[uid]
+        socket_client = connection.socket
         try:
             await asyncio.get_event_loop().sock_sendall(socket_client, message)
         except OSError:
             LoggerFactory.get_logger().warn(f'{uid} os error')
             pass
         if not message:
-            asyncio.get_event_loop().run_in_executor(None, self.close_connection, socket_client)
+            asyncio.get_event_loop().run_in_executor(None, self.close_connection, connection)
 
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
-    def close_connection(self, socket_client: socket.socket):
-        # todo
-        LoggerFactory.get_logger().info(f'close {socket_client}')
-        # with self.close_lock:
-        if socket_client not in self.client_to_uid:
-            return
-        self.socket_event_loop.unregister(socket_client)
-        uid = self.client_to_uid.pop(socket_client)
-        self.uid_to_client.pop(uid)
-        listen_server_socket = self.uid_to_listen_socket_server.pop(uid)
-        self.uid_to_name_ip_port.pop(uid)
-        self.listen_socket_server_to_uid_set[listen_server_socket].remove(uid)
-
-        socket_client.close()
+    def close_connection(self, connection: PublicSocketConnection):
+        try:
+            LoggerFactory.get_logger().info(f'close {connection.uid}')
+            # with self.close_lock:
+            uid = connection.uid
+            if uid not in self.uid_to_connection:
+                return
+            self.socket_event_loop.unregister(connection.socket)
+            self.uid_to_connection.pop(uid)
+            self.socket_to_connection.pop(connection.socket)
+            connection.socket_server.delete_client(connection)
+            connection.socket.close()
+        except Exception:
+            LoggerFactory.get_logger().error(f'close error {traceback.format_exc()}')
+            raise
 
     @classmethod
     def create_listen_socket(cls, port):
@@ -252,8 +241,8 @@ class TcpForwardClient:
         #             LoggerFactory.get_logger().warn(f'unregister error, {client}, {traceback.format_exc()}')
         # except Exception:
         #     LoggerFactory.get_logger().warning(f'close error: {traceback.format_exc()}')
-        self.client_to_uid.clear()
-        self.uid_to_client.clear()
+        # self.client_to_uid.clear()
+        # self.uid_to_client.clear()
         # close server
         # if self.socket:
         #     try:
