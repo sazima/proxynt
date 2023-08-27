@@ -19,10 +19,8 @@ from common.pool import SelectPool
 from common.register_append_data import ResisterAppendData
 from common.speed_limit import SpeedLimiter
 from constant.message_type_constnat import MessageTypeConstant
-from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
-from entity.message.push_config_entity import ClientData
 
 
 class PublicSocketServer:
@@ -42,6 +40,9 @@ class PublicSocketServer:
     def delete_client(self, client: 'PublicSocketConnection'):
         self.client_set.remove(client)
 
+    def __str__(self):
+        return f'{self.name}_{self.ip_port}'
+
 
 class PublicSocketConnection:
     """对应连接公网端口的客户端"""
@@ -51,6 +52,9 @@ class PublicSocketConnection:
         self.socket: socket.socket = s
         self.socket_server = socket_server
         self.socket_server.add_client(self)
+
+    def __str__(self):
+        return f'{self.uid}_{self.socket}_{self.socket_server.name}'
 
 
 class TcpForwardClient:
@@ -127,6 +131,8 @@ class TcpForwardClient:
         except ConnectionResetError:
             recv = b''
         # client = self.uid_to_client[uid]
+        if each not in self.socket_to_connection:
+            return
         socket_connection = self.socket_to_connection[each]
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,

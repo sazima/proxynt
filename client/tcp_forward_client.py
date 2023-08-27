@@ -161,7 +161,7 @@ class TcpForwardClient:
         try:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'send to {uid}, {len(msg)}')
-            s = self.uid_to_socket_connection[uid].socket
+            s = connection.socket
             s.sendall(msg)
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'send success to {uid}, {len(msg)}')
