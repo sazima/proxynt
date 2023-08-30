@@ -140,7 +140,7 @@
         },
         mounted() {
             this.getClientList()
-            this.intervalTask = setInterval(this.getClientList, 3000)
+            this.intervalTask = setInterval(this.getClientList, 6000)
         },
         beforeDestroy() {
             this.intervalTask.stop()
@@ -182,6 +182,7 @@
                         return alert(res.data.msg)
                     }
                     this.dialogFormVisible = false
+                    this.getClientList()
                 }).catch(err => {
                     console.log(err)
                     this.$message.error('错了哦，这是一条错误消息')
@@ -206,6 +207,7 @@
                             return alert(res.data.msg)
                         }
                         this.dialogFormVisible = false
+                        this.getClientList()
                     }).catch(err => {
                         console.log(err)
                         alert('服务器出现错误')
