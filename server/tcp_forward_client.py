@@ -134,6 +134,8 @@ class TcpForwardClient:
         if each not in self.socket_to_connection:
             return
         socket_connection = self.socket_to_connection[each]
+        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+            LoggerFactory.get_logger().debug(f'send to ws uid: {socket_connection.uid}, len: {len(recv)}')
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
@@ -195,6 +197,8 @@ class TcpForwardClient:
             return
         connection = self.uid_to_connection[uid]
         socket_client = connection.socket
+        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+            LoggerFactory.get_logger().debug(f'send to socket uid: {uid}, len: {len(message)}')
         try:
             await asyncio.get_event_loop().sock_sendall(socket_client, message)
         except OSError:

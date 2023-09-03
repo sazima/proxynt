@@ -50,7 +50,7 @@ class TcpForwardClient:
             if data.speed_limiter:
                 data.speed_limiter.add(len(recv))
         except OSError as e:
-            LoggerFactory.get_logger().warn('get os error: {str(e)}, close')
+            LoggerFactory.get_logger().warn(f'get os error: {str(e)}, close')
             recv = b''
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
@@ -64,7 +64,7 @@ class TcpForwardClient:
         start_time = time.time()
         self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-            LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
+            LoggerFactory.get_logger().debug(f'send to ws  uid: {connection.uid} len {len(recv)} , cost time {time.time() - start_time}')
         if not recv:
             try:
                 self.close_connection(each)
@@ -160,11 +160,11 @@ class TcpForwardClient:
             return
         try:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'send to {uid}, {len(msg)}')
+                LoggerFactory.get_logger().debug(f'start send to  socket uid: {uid}, {len(msg)}')
             s = connection.socket
             s.sendall(msg)
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'send success to {uid}, {len(msg)}')
+                LoggerFactory.get_logger().debug(f'finish send to socket uid {uid}, {len(msg)}')
             if not msg:
                 self.close_connection(s)
         except Exception:

@@ -139,6 +139,7 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self._on_close(code, reason))
 
     async def _on_close(self, code: int = None, reason: str = None) -> None:
+        LoggerFactory.get_logger().info(f'close {self.client_name}, code: {code}, reason, {reason}')
         try:
             async with self.lock:
                 if self.client_name:
