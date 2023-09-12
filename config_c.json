@@ -1,10 +1,7 @@
 {
   "server": {
-    "port": 18888,
-    "host": "192.168.9.224",
-    "https": false,
-    "password": "helloworld",
-    "path": "/websocket_path"
+    "url": "ws://192.168.9.224:18888/websocket_path",
+    "password": "helloworld"
   },
   "client_name": "windows10_sql",
   "log_file": "/var/log/nt/nt.log"
