@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from typing_extensions import TypedDict
 
@@ -6,6 +6,7 @@ from entity.message.push_config_entity import ClientData
 
 
 class _ServerEntity(TypedDict):
+    url: Optional[str]  #
     port: int
     host: str
 

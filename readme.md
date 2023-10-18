@@ -38,8 +38,8 @@ pip install -U proxynt
 ```json
 {
   "port": 18888,
-  "password": "helloworld",
   "path": "/websocket_path",
+  "password": "helloworld",
   "admin": {
     "enable": true,  
     "admin_password": "new_password"  
@@ -64,14 +64,10 @@ config_c.json内容:
 ```json
 {
   "server": {
-    "port": 18888,
-    "host": "192.168.9.224",
-    "https": false,
-    "password": "helloworld",
-    "path": "/websocket_path"
+    "url": "ws://192.168.9.224:18888/websocket_path",
+    "password": "helloworld"
   },
-  "client_name": "home_pc",
-  "client": []
+  "client_name": "home_pc"
 }
 ```
 
@@ -79,9 +75,8 @@ config_c.json内容:
 `nt_client -c config_c.json`
 
 说明:
-- `server`: 要连接的服务器端口, ip, 是否是https, 密码, websocket路径
+- `server`: 设置连接服务器的WebSocket链接和密码
 - `client_name`: 客户端名称
-- `client`:  空数组
 
 #### 3. 打开服务端网页 `http://192.168.9.224:18888/websocket_path/admin` 添加端口:
 
@@ -101,11 +96,8 @@ ssh -oPort=12222 test@192.168.9.224
 ```json5
 {
   "server": {  // 要连接的服务端配置
-    "port": 18888,  // 端口
-    "host": "192.168.9.224",  // 端ip
-    "https": false,  //服务端是否启动https
-    "password": "helloworld",  // 密码
-    "path": "/websocket_path"  // websocket 路径
+    "url": "ws://192.168.9.224:18888/websocket_path",  // 服务器websocket链接, 视情况写ws://或者wss://
+    "password": "helloworld"  // 密码
   },
   "client": [  // 转发的配置列表(这里可以不填, 在服务端网页上配置)
     {

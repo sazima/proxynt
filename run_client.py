@@ -53,17 +53,15 @@ OPEN_CLOSE_LOCK = threading.Lock()
 
 name_to_speed_limiter: Dict[str, SpeedLimiter] = {}
 
+
 def get_config() -> ClientConfigEntity:
     parser = OptionParser(usage="""usage: %prog -c config_c.json 
     
 config_c.json example: 
 {
   "server": {
-    "port": 18888,
-    "host": "192.168.9.224",
-    "https": false,
-    "password": "helloworld",
-    "path": "/websocket_path"
+    "url": "ws://192.168.9.224:18888/websocket_path",
+    "password": "helloworld"
   },
    "client_name": "ubuntu1",
   "client": [
@@ -216,12 +214,14 @@ def main():
     log_path = config_data.get('log_file')
     ContextUtils.set_log_file(log_path)
     ContextUtils.set_nonce_to_time({})
-    url = ''
-    if server_config['https']:
-        url += 'wss://'
-    else:
-        url += 'ws://'
-    url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}"
+    url = server_config.get('url', '')
+    if not url:
+        url = ''
+        if server_config['https']:
+            url += 'wss://'
+        else:
+            url += 'ws://'
+        url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}"
     LoggerFactory.get_logger().info(f'start open {url}')
     ws = websocket.WebSocketApp(url)
     forward_client = TcpForwardClient(ws)
