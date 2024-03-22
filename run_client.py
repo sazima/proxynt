@@ -126,7 +126,10 @@ class WebsocketClient:
 
     def send(self, data, opcode=ABNF.OPCODE_TEXT):
         if opcode == ABNF.OPCODE_BINARY and self.compress_support:
+            old_len = len(data)
             data = snappy.snappy.compress(data)
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug(f'压缩了: {old_len - len(data) }::: 新数据长度{len(data)},  原数据长度{old_len}')
         if not self.ws.sock or self.ws.sock.send(data, opcode) == 0:
             raise WebSocketConnectionClosedException(
                 "Connection is already closed.")

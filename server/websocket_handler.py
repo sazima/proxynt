@@ -4,6 +4,7 @@ import logging
 import time
 import traceback
 from asyncio import Lock
+from concurrent.futures import ThreadPoolExecutor
 from json import JSONDecodeError
 from typing import List, Dict, Set
 
@@ -28,6 +29,7 @@ from exceptions.replay_error import ReplayError
 from exceptions.signature_error import SignatureError
 from server.tcp_forward_client import TcpForwardClient
 
+p = ThreadPoolExecutor(max_workers=50)
 
 class MyWebSocketaHandler(WebSocketHandler):
     client_name: str
@@ -60,7 +62,7 @@ class MyWebSocketaHandler(WebSocketHandler):
         try:
             byte_message = bytes(message)
             if self.compress_support:
-                byte_message = snappy.snappy.compress(byte_message)
+                byte_message = await asyncio.get_event_loop().run_in_executor(p, snappy.snappy.compress, byte_message)
             await (super(MyWebSocketaHandler, self).write_message(byte_message, binary))
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}, len: {len(message)}')
@@ -71,11 +73,14 @@ class MyWebSocketaHandler(WebSocketHandler):
             raise
 
     def on_message(self, m_bytes):
-        if self.compress_support:
-            m_bytes = snappy.snappy.uncompress(m_bytes)
         asyncio.ensure_future(self.on_message_async(m_bytes))
 
     async def on_message_async(self, message):
+        if self.compress_support:
+            old_len = len(message)
+            message = await asyncio.get_event_loop().run_in_executor(p, snappy.snappy.uncompress, message)
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().info(f'压缩了: {len(message) - old_len }::: {len(message)}, {old_len}')
         tcp_forward_client = TcpForwardClient.get_instance()
         try:
             message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
