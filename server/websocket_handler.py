@@ -1,15 +1,18 @@
 import asyncio
 import json
 import logging
-import socket
 import time
 import traceback
 from asyncio import Lock
-from collections import defaultdict
-from threading import Thread
-from typing import List, Dict, Set, Tuple
+from json import JSONDecodeError
+from typing import List, Dict, Set
 
-from tornado.ioloop import IOLoop
+try:
+    import snappy
+    has_snappy = True
+except ModuleNotFoundError:
+    has_snappy = False
+
 from tornado.websocket import WebSocketHandler
 
 from common.nat_serialization import NatSerialization
@@ -33,6 +36,8 @@ class MyWebSocketaHandler(WebSocketHandler):
     names: Set[str]
     recv_time: float = None
 
+    compress_support: bool = False  # 是否支持snappy压缩
+
     # handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock = Lock()
@@ -40,12 +45,23 @@ class MyWebSocketaHandler(WebSocketHandler):
     def open(self, *args: str, **kwargs: str):
         self.client_name = None
         self.version = None
-        LoggerFactory.get_logger().info('new open websocket')
+        try:
+            self.compress_support = json.loads(self.get_argument('c', 'false'))
+        except JSONDecodeError:
+            self.compress_support = False
+        if self.compress_support and not has_snappy:
+            msg = 'python-snappy is not installed on the server'
+            LoggerFactory.get_logger().info(msg)
+            self.close(reason=msg)
+        LoggerFactory.get_logger().info(f'new open websocket, compress_support: {self.compress_support}')
 
     async def write_message(self, message, binary=False):
         start_time = time.time()
         try:
-            await (super(MyWebSocketaHandler, self).write_message(bytes(message), binary))
+            byte_message = bytes(message)
+            if self.compress_support:
+                byte_message = snappy.snappy.compress(byte_message)
+            await (super(MyWebSocketaHandler, self).write_message(byte_message, binary))
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}, len: {len(message)}')
             return
@@ -55,6 +71,8 @@ class MyWebSocketaHandler(WebSocketHandler):
             raise
 
     def on_message(self, m_bytes):
+        if self.compress_support:
+            m_bytes = snappy.snappy.uncompress(m_bytes)
         asyncio.ensure_future(self.on_message_async(m_bytes))
 
     async def on_message_async(self, message):
