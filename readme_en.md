@@ -2,7 +2,7 @@
 
 ProxyNT is a reverse proxy server that can expose a local server to the internet through NATs and firewalls
 
-![原理](https://i.imgtg.com/2023/02/08/cqhoI.png)
+![原理](./preview.png)
 
 ## Features
 1. Open port mapping via browser anytime and anywhere
@@ -62,14 +62,10 @@ Explanation:
 ```json
 {
   "server": {
-    "port": 18888,
-    "host": "192.168.9.224",
-    "https": false,
-    "password": "helloworld",
-    "path": "/websocket_path"
+    "url": "ws://192.168.9.224:18888/websocket_path",
+    "password": "helloworld"
   },
-  "client_name": "home_pc",
-  "client": []
+  "client_name": "home_pc"
 }
 ```
 
@@ -83,7 +79,7 @@ Explanation:
 
 #### 3. Open the server webpage `http://192.168.9.224:18888/websocket_path/admin` and add a port:
 
-![VWCvq.md.png](https://i.imgtg.com/2023/02/27/VWCvq.md.png)
+![VWCvq.md.png](preview1.png)
 
 
 Explanation: The management page path is **WebSocket path + /admin** .

@@ -7,7 +7,7 @@ ProxyNT 是一个反向代理服务器，可以透过NAT和防火墙将本地服
 
 ## 原理
 
-![原理](https://i.imgtg.com/2023/02/08/cqhoI.png)
+![原理](./preview.png)
 
 ## 特性
 
@@ -80,7 +80,7 @@ config_c.json内容:
 
 #### 3. 打开服务端网页 `http://192.168.9.224:18888/websocket_path/admin` 添加端口:
 
-![VWCvq.md.png](https://i.imgtg.com/2023/02/27/VWCvq.md.png)
+![VWCvq.md.png](preview1.png)
 
 说明: 管理页面路径为 **websocket路径 + /admin**
 
@@ -119,7 +119,7 @@ ssh -oPort=12222 test@192.168.9.224
 ```
 
 
-- 服务端 config_c.json
+- 服务端 config_s.json
 ```json5
 {
     "port": 18888,  // 监听端口
