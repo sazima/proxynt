@@ -118,27 +118,14 @@ class WebsocketClient:
         self.ws.on_message = self.on_message
         self.ws.on_close = self.on_close
         self.ws.on_open = self.on_open
-        self.ws.send = self.send
         self.forward_client: TcpForwardClient = tcp_forward_client
         self.heart_beat_task = heart_beat_task
         self.config_data: ClientConfigEntity = config_data
         self.compress_support: bool = config_data['server']['compress']
 
-    def send(self, data, opcode=ABNF.OPCODE_TEXT):
-        if opcode == ABNF.OPCODE_BINARY and self.compress_support:
-            old_len = len(data)
-            data = snappy.snappy.compress(data)
-            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'压缩了: {old_len - len(data) }::: 新数据长度{len(data)},  原数据长度{old_len}')
-        if not self.ws.sock or self.ws.sock.send(data, opcode) == 0:
-            raise WebSocketConnectionClosedException(
-                "Connection is already closed.")
-
     def on_message(self, ws, message: bytes):
         try:
-            if self.compress_support:
-                message = snappy.snappy.uncompress(message)
-            message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
+            message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support)
             start_time = time.time()
             time_ = message_data['type_']
             if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
@@ -193,7 +180,7 @@ class WebsocketClient:
                 }
                 self.heart_beat_task.set_recv_heart_beat_time(time.time())
 
-                ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+                ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
                 self.forward_client.is_running = True
                 self.heart_beat_task.is_running = True
                 task = Thread(target=self.forward_client.start_forward)
@@ -253,7 +240,7 @@ def main():
         else:
             url += '?c=' + json.dumps(compress_support)
     ws = websocket.WebSocketApp(url)
-    forward_client = TcpForwardClient(ws)
+    forward_client = TcpForwardClient(ws, compress_support)
     heart_beat_task = HeatBeatTask(ws)
     WebsocketClient(ws, forward_client, heart_beat_task, config_data)
     LoggerFactory.get_logger().info('start run_forever')

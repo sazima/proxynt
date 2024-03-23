@@ -29,7 +29,8 @@ from exceptions.replay_error import ReplayError
 from exceptions.signature_error import SignatureError
 from server.tcp_forward_client import TcpForwardClient
 
-p = ThreadPoolExecutor(max_workers=50)
+p = ThreadPoolExecutor(max_workers=100)
+
 
 class MyWebSocketaHandler(WebSocketHandler):
     client_name: str
@@ -42,9 +43,10 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     # handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
-    lock = Lock()
+    lock: Lock
 
     def open(self, *args: str, **kwargs: str):
+        self.lock = Lock()
         self.client_name = None
         self.version = None
         try:
@@ -61,8 +63,8 @@ class MyWebSocketaHandler(WebSocketHandler):
         start_time = time.time()
         try:
             byte_message = bytes(message)
-            if self.compress_support:
-                byte_message = await asyncio.get_event_loop().run_in_executor(p, snappy.snappy.compress, byte_message)
+            # if self.compress_support:
+            #     byte_message = await asyncio.get_event_loop().run_in_executor(p, snappy.snappy.compress, byte_message)
             await (super(MyWebSocketaHandler, self).write_message(byte_message, binary))
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}, len: {len(message)}')
@@ -76,14 +78,13 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self.on_message_async(m_bytes))
 
     async def on_message_async(self, message):
-        if self.compress_support:
-            old_len = len(message)
-            message = await asyncio.get_event_loop().run_in_executor(p, snappy.snappy.uncompress, message)
-            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().info(f'压缩了: {len(message) - old_len }::: {len(message)}, {old_len}')
+        # old_len = len(message)
+        # message = await asyncio.get_event_loop().run_in_executor(p, snappy.snappy.uncompress, message)
+        # if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+        #     LoggerFactory.get_logger().info(f'压缩了: {len(message) - old_len }::: {len(message)}, {old_len}')
         tcp_forward_client = TcpForwardClient.get_instance()
         try:
-            message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
+            message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support)
         except json.decoder.JSONDecodeError:
             self.close(reason='invalid password')
             raise InvalidPassword()
@@ -148,7 +149,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.recv_time = time.time()
                     self.client_name_to_handler[client_name] = self
                     self.push_config = push_config
-                await self.write_message(NatSerialization.dumps(message_dict, key), binary=True)  # 更新完配置再发给客户端
+                await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support), binary=True)  # 更新完配置再发给客户端
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.recv_time = time.time()
                 # if self.client_name:  # 只有带 client_name 的心跳时间才有用
