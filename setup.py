@@ -27,5 +27,8 @@ setuptools.setup(
     nt_server = {package_name}.run_server:main
     """,
     packages=l,
-    install_requires=['tornado',  'typing_extensions']
+    install_requires=['tornado',  'typing_extensions'],
+    extras_require={
+        "snappy": ["python-snappy"],
+    },
 )

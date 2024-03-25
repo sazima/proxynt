@@ -30,7 +30,7 @@ class PublicSocketServer:
         self.socket_server = s
         self.name: str = name
         self.ip_port: str = ip_port
-        self.websocket_handler = websocket_handler
+        self.websocket_handler: 'MyWebSocketaHandler' = websocket_handler
         self.speed_limit_size: float = speed_limit_size
         self.client_set: Set['PublicSocketConnection'] = set()
 
@@ -152,9 +152,9 @@ class TcpForwardClient:
             except (OSError, ValueError, KeyError):
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
         try:
-
+            is_compress = socket_connection.socket_server.websocket_handler.compress_support
             self.tornado_loop.add_callback(
-                partial(socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True)
+                partial(socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress)), True)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
@@ -187,7 +187,7 @@ class TcpForwardClient:
             }
         }
         self.tornado_loop.add_callback(
-            partial(client_socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password())), True
+            partial(client_socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), False)), True
         )
 
     async def send_to_socket(self, uid: bytes, message: bytes):

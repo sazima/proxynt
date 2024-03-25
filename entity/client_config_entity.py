@@ -13,6 +13,7 @@ class _ServerEntity(TypedDict):
     https: bool
     password: str
     path: str
+    compress: bool
 
 
 class ClientConfigEntity(TypedDict):

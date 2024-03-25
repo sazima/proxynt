@@ -10,13 +10,18 @@ import traceback
 from optparse import OptionParser
 from threading import Thread
 from typing import List, Set, Dict
+try:
+    import snappy
+    has_snappy = True
+except ModuleNotFoundError:
+    has_snappy = False
 
 from tornado import ioloop
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.speed_limit import SpeedLimiter
-from common.websocket import WebSocketException
+from common.websocket import WebSocketException, ABNF, WebSocketConnectionClosedException
 
 from client.clear_nonce_task import ClearNonceTask
 from client.heart_beat_task import HeatBeatTask
@@ -116,10 +121,11 @@ class WebsocketClient:
         self.forward_client: TcpForwardClient = tcp_forward_client
         self.heart_beat_task = heart_beat_task
         self.config_data: ClientConfigEntity = config_data
+        self.compress_support: bool = config_data['server']['compress']
 
     def on_message(self, ws, message: bytes):
         try:
-            message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password())
+            message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support)
             start_time = time.time()
             time_ = message_data['type_']
             if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
@@ -174,7 +180,7 @@ class WebsocketClient:
                 }
                 self.heart_beat_task.set_recv_heart_beat_time(time.time())
 
-                ws.send(NatSerialization.dumps(message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+                ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
                 self.forward_client.is_running = True
                 self.heart_beat_task.is_running = True
                 task = Thread(target=self.forward_client.start_forward)
@@ -222,9 +228,19 @@ def main():
         else:
             url += 'ws://'
         url += f"{server_config['host']}:{str(server_config['port'])}{server_config['path']}"
+    config_data['server'].setdefault('compress', False)
+    compress_support = config_data['server']['compress']
+    assert isinstance(compress_support, bool)
+    if compress_support and not has_snappy:
+        raise Exception('snappy is not installed')
     LoggerFactory.get_logger().info(f'start open {url}')
+    if compress_support:
+        if '?' in url:  # 补充 compress_support 参数
+            url += '&c=' + json.dumps(compress_support)
+        else:
+            url += '?c=' + json.dumps(compress_support)
     ws = websocket.WebSocketApp(url)
-    forward_client = TcpForwardClient(ws)
+    forward_client = TcpForwardClient(ws, compress_support)
     heart_beat_task = HeatBeatTask(ws)
     WebsocketClient(ws, forward_client, heart_beat_task, config_data)
     LoggerFactory.get_logger().info('start run_forever')

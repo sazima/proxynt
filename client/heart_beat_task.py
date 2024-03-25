@@ -48,7 +48,7 @@ class HeatBeatTask:
                 'type_': MessageTypeConstant.PING,
                 'data': None
             }
-            self.ws.send(NatSerialization.dumps(ping_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+            self.ws.send(NatSerialization.dumps(ping_message, ContextUtils.get_password(), False), websocket.ABNF.OPCODE_BINARY)
             # LoggerFactory.get_logger().debug('send client heart beat success ')
         else:
             pass

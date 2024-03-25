@@ -3,6 +3,12 @@ import os
 import struct
 import time
 
+try:
+    import snappy
+    has_snappy = True
+except ModuleNotFoundError:
+    has_snappy = False
+
 from common.encrypt_utils import EncryptUtils
 from constant.message_type_constnat import MessageTypeConstant
 from constant.system_constant import SystemConstant
@@ -30,13 +36,16 @@ class NatSerialization:
 
     # 报文形式: 类型, 数据
     @classmethod
-    def dumps(cls, data: MessageEntity, key: str, encrypt_data: bool = True) -> bytes:
+    def dumps(cls, data: MessageEntity, key: str, compress: bool) -> bytes:
         type_ = data['type_']
         if type_ in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
             data_content: TcpOverWebsocketMessage = data['data']
             uid = data_content['uid']  # 长度r
             name = data_content['name']
-            bytes_ = data_content['data']
+            if compress:
+                bytes_: TcpOverWebsocketMessage = snappy.snappy.compress(data_content['data'])
+            else:
+                bytes_ = data_content['data']
             ip_port = data_content['ip_port']
             body = struct.pack(f'BBI{UID_LEN}s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_), uid, name.encode(), ip_port.encode(), bytes_)
 
@@ -56,7 +65,6 @@ class NatSerialization:
 
     @classmethod
     def check_signature(cls, clear_text: bytes, data_len: int, key: str) -> bool:
-        # return True
         nonce_and_timestamp = clear_text[5:14]
         body = clear_text[HEADER_LEN: data_len + HEADER_LEN]
         signature = clear_text[14:30]
@@ -75,7 +83,7 @@ class NatSerialization:
         # return True
 
     @classmethod
-    def loads(cls, byte_data: bytes, key: str) -> MessageEntity:
+    def loads(cls, byte_data: bytes, key: str, compress: bool) -> MessageEntity:
         byte_data = EncryptUtils.decrypt(byte_data, key)
         type_ = byte_data[0:1]
         body_len = struct.unpack('I', byte_data[1:5])[0]
@@ -88,6 +96,8 @@ class NatSerialization:
         if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
             len_name, len_ip_port, len_bytes = struct.unpack('BBI', body[:8])
             uid, name, ip_port,  socket_dta = struct.unpack(f'4s{len_name}s{len_ip_port}s{len_bytes}s', body[8:])
+            if compress and len(socket_dta):
+                socket_dta = snappy.snappy.uncompress(socket_dta)
             data: TcpOverWebsocketMessage = {
                 'uid': uid,
                 'name': name.decode(),
@@ -122,12 +132,13 @@ if __name__ == '__main__':
 
     data = {'type_': '5',
             'data': {'name': 'ssh',
-                     'data': b'SSH-2.0-OpenSSH_7.8\r\n' ,
+                     # 'data': 'SSH-2.0-OpenSSH_7.8'.encode() ,
+                     'data': b'' ,
                      'uid': os.urandom(4),
                      'ip_port': '127.0.0.1:8888'}}
     key32 = 'xxxx'
     # salt = '!%F=-?Pst970'
-    a = NatSerialization.dumps(data, key32)
+    a = NatSerialization.dumps(data, key32, False)
     print(a)
-    b = NatSerialization.loads(a, key32)
+    b = NatSerialization.loads(a, key32, True)
     print(b)
