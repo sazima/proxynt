@@ -26,9 +26,10 @@ class PrivateSocketConnection:
 
 
 class TcpForwardClient:
-    def __init__(self, ws: websocket):
+    def __init__(self, ws: websocket, compress_support: bool):
         self.uid_to_socket_connection: Dict[bytes, PrivateSocketConnection] = dict()
         self.socket_to_socket_connection: Dict[socket.socket, PrivateSocketConnection] = dict()
+        self.compress_support: bool = compress_support
         self.is_running = True
         self.ws = ws
         self.lock = Lock()
@@ -62,7 +63,7 @@ class TcpForwardClient:
             }
         }
         start_time = time.time()
-        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to ws  uid: {connection.uid} len {len(recv)} , cost time {time.time() - start_time}')
         if not recv:
@@ -151,7 +152,7 @@ class TcpForwardClient:
             }
         }
         start_time = time.time()
-        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password()), websocket.ABNF.OPCODE_BINARY)
+        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
         LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
 
     def send_by_uid(self, uid: bytes, msg: bytes):
