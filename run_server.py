@@ -4,6 +4,7 @@ import logging
 import os.path
 import signal
 import sys
+import time
 from optparse import OptionParser
 
 
@@ -22,6 +23,7 @@ from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler, Sho
 from server.task.heart_beat_task import HeartBeatTask
 from server.tcp_forward_client import TcpForwardClient
 from server.websocket_handler import MyWebSocketaHandler
+tornado.ioloop.IOLoop.configure(tornado.ioloop.IOLoop.configured_class(), time_func=time.monotonic)
 
 DEFAULT_CONFIG = './config_s.json'
 DEFAULT_LOGGER_LEVEL = logging.INFO

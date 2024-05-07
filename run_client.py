@@ -10,6 +10,9 @@ import traceback
 from optparse import OptionParser
 from threading import Thread
 from typing import List, Set, Dict
+
+import tornado
+
 try:
     import snappy
     has_snappy = True
@@ -37,6 +40,8 @@ from entity.message.message_entity import MessageEntity
 from entity.message.push_config_entity import PushConfigEntity, ClientData
 from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
 from exceptions.duplicated_name import DuplicatedName
+
+tornado.ioloop.IOLoop.configure(tornado.ioloop.IOLoop.configured_class(), time_func=time.monotonic)
 
 try:
     from common.websocket._logging import _logger
