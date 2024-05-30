@@ -6,7 +6,7 @@ import signal
 import sys
 import time
 from optparse import OptionParser
-
+from threading import Thread
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -130,13 +130,13 @@ def main():
     app = tornado.web.Application(handlers, static_path=static_path, static_url_prefix=status_url_path, template_path=template_path)
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}, websocket_path: {websocket_path}, admin_path: {admin_html_path}')
-    heart_beat_task = HeartBeatTask(asyncio.get_event_loop())
     # create interval task
+    heart_beat_task = HeartBeatTask(asyncio.get_event_loop(), SystemConstant.HEART_BEAT_INTERVAL)
+    Thread(target=heart_beat_task.run).start()
     check_cookie_task = CheckCookieTask()
-    tornado.ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
     tornado.ioloop.PeriodicCallback(check_cookie_task.run, 3600 * 1000).start()
-    clear_nonce_stak = ClearNonceTask()
-    tornado.ioloop.PeriodicCallback(clear_nonce_stak.run, 1800 * 1000).start()
+    # clear_nonce_stak = ClearNonceTask()
+    # tornado.ioloop.PeriodicCallback(clear_nonce_stak.run, 1800 * 1000).start()
     tornado.ioloop.IOLoop.current().start()
 
 

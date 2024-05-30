@@ -51,6 +51,7 @@ class TcpForwardClient:
             if data.speed_limiter:
                 data.speed_limiter.add(len(recv))
         except OSError as e:
+            LoggerFactory.get_logger().error(f'{traceback.format_exc()}')
             LoggerFactory.get_logger().warn(f'get os error: {str(e)}, close')
             recv = b''
         send_message: MessageEntity = {

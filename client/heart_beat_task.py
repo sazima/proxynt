@@ -1,9 +1,8 @@
 import asyncio
-import threading
+import logging
 import time
 import traceback
 
-from tornado import ioloop
 
 from common import websocket
 from common.logger_factory import LoggerFactory
@@ -16,30 +15,38 @@ from entity.message.message_entity import MessageEntity
 
 
 class HeatBeatTask:
-    def __init__(self, ws: websocket.WebSocketApp):
+    def __init__(self, ws: websocket.WebSocketApp, sleep_break: int,):
         self.ws: websocket.WebSocketApp = ws
         self.is_running = False
         self.recv_heart_beat_time: float = time.time()
-        self.lock = asyncio.Lock()
+        self.sleep_break = sleep_break
 
     def set_recv_heart_beat_time(self, d: float):
         self.recv_heart_beat_time = d
 
-    async def run(self):
-        if self.lock.locked():
-            LoggerFactory.get_logger().error('locked return')
-            return
-        async with self.lock:
+    def run(self):
+        # asyncio.set_event_loop(self.event_loop)
+        while True:
+            time.sleep(self.sleep_break)
+            if not self.is_running:
+                continue
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug('run send heartbeat')
             try:
-                await asyncio.wait_for(ioloop.IOLoop.current().run_in_executor(None, self.send_heart_beat), timeout=20)
+                # await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, self.send_heart_beat), timeout=20)
+                self.send_heart_beat()
             except WebSocketConnectionClosedException:
                 try:
-                    await asyncio.wait_for(ioloop.IOLoop.current().run_in_executor(None, self._close_and_on_close), timeout=20)
+                    self._close_and_on_close()
+                    # await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, self._close_and_on_close), timeout=20)
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
-            self.check_recv_heart_beat_time()
+            try:
+                self.check_recv_heart_beat_time()
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
 
     def send_heart_beat(self):
         if self.is_running:
