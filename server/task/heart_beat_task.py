@@ -12,15 +12,21 @@ from server.websocket_handler import MyWebSocketaHandler
 
 
 class HeartBeatTask:
-    def __init__(self, loop):
+    def __init__(self, loop, break_time):
         self.loop = loop
+        self.break_time = break_time
 
-    async def run(self):
-        try:
-            await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, self.send_heart_beat), timeout=20)
-        except Exception:
-            LoggerFactory.get_logger().error(traceback.format_exc())
-        self.check_recv_heart_beat_time()
+    def run(self):
+        while True:
+            time.sleep(self.break_time)
+            try:
+                self.send_heart_beat()
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
+            try:
+                self.check_recv_heart_beat_time()
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
 
     def send_heart_beat(self):
         asyncio.set_event_loop(self.loop)

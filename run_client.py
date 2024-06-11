@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -26,7 +27,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common.speed_limit import SpeedLimiter
 from common.websocket import WebSocketException, ABNF, WebSocketConnectionClosedException
 
-from client.clear_nonce_task import ClearNonceTask
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
 from common import websocket
@@ -246,13 +246,14 @@ def main():
             url += '?c=' + json.dumps(compress_support)
     ws = websocket.WebSocketApp(url)
     forward_client = TcpForwardClient(ws, compress_support)
-    heart_beat_task = HeatBeatTask(ws)
+    heart_beat_task = HeatBeatTask(ws, SystemConstant.HEART_BEAT_INTERVAL)
     WebsocketClient(ws, forward_client, heart_beat_task, config_data)
     LoggerFactory.get_logger().info('start run_forever')
     Thread(target=run_client, args=(ws,)).start()  # 为了使用tornado的ioloop 方便设置超时
-    ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
-    clear_nonce_stak = ClearNonceTask()
-    ioloop.PeriodicCallback(clear_nonce_stak.run, 1800 * 1000).start()
+    Thread(target=heart_beat_task.run).start()
+    # ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
+    # clear_nonce_stak = ClearNonceTask()
+    # ioloop.PeriodicCallback(clear_nonce_stak.run, 1800 * 1000).start()
     ioloop.IOLoop.current().start()
 
 
