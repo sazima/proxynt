@@ -113,6 +113,11 @@ class TcpForwardClient:
         if socket_client in self.socket_to_socket_connection:
             connection: PrivateSocketConnection = self.socket_to_socket_connection.pop(socket_client)
             self.socket_event_loop.unregister(socket_client)
+            # socket_client.close()
+            try:
+                socket_client.shutdown(socket.SHUT_RDWR)
+            except OSError as e:
+                LoggerFactory.get_logger().warn(f'shutdown OS error {e}')
             socket_client.close()
             LoggerFactory.get_logger().info(f'close success {socket_client}')
             if connection.uid in self.uid_to_socket_connection:
