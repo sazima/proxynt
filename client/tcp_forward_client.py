@@ -128,12 +128,12 @@ class TcpForwardClient:
         with self.lock:
             self.socket_event_loop.stop()
             for uid, c in self.uid_to_socket_connection.items():
+                s = c.socket
                 try:
                     self.socket_event_loop.unregister(s)
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
                 try:
-                    s = c.socket
                     try:
                         s.shutdown(socket.SHUT_RDWR)
                     except OSError as e:

@@ -170,6 +170,9 @@ class WebsocketClient:
     def on_open(self, ws):
         with OPEN_CLOSE_LOCK:
             try:
+                LoggerFactory.get_logger().info('close before open..')
+                self.heart_beat_task.is_running = False  #
+                self.forward_client.close()
                 LoggerFactory.get_logger().info('open success')
                 push_client_data: List[ClientData] = self.config_data['client']
                 client_name = self.config_data.get('client_name', socket.gethostname())
