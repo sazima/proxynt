@@ -124,7 +124,7 @@ class WebsocketClient:
         self.ws.on_close = self.on_close
         self.ws.on_open = self.on_open
         self.forward_client: TcpForwardClient = tcp_forward_client
-        self.heart_beat_task = heart_beat_task
+        self.heart_beat_task: HeatBeatTask = heart_beat_task
         self.config_data: ClientConfigEntity = config_data
         self.compress_support: bool = config_data['server']['compress']
 
