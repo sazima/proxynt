@@ -189,10 +189,8 @@ class WebsocketClient:
                 self.heart_beat_task.set_recv_heart_beat_time(time.time())
 
                 ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
-                self.forward_client.is_running = True
+                self.forward_client.set_running(True)
                 self.heart_beat_task.is_running = True
-                task = Thread(target=self.forward_client.start_forward)
-                task.start()
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
 
@@ -254,9 +252,7 @@ def main():
     LoggerFactory.get_logger().info('start run_forever')
     Thread(target=run_client, args=(ws,)).start()  # 为了使用tornado的ioloop 方便设置超时
     Thread(target=heart_beat_task.run).start()
-    # ioloop.PeriodicCallback(heart_beat_task.run, SystemConstant.HEART_BEAT_INTERVAL * 1000).start()
-    # clear_nonce_stak = ClearNonceTask()
-    # ioloop.PeriodicCallback(clear_nonce_stak.run, 1800 * 1000).start()
+    Thread(target=forward_client.start_forward).start()
     ioloop.IOLoop.current().start()
 
 
