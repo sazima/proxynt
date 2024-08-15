@@ -30,14 +30,15 @@ class TcpForwardClient:
         self.uid_to_socket_connection: Dict[bytes, PrivateSocketConnection] = dict()
         self.socket_to_socket_connection: Dict[socket.socket, PrivateSocketConnection] = dict()
         self.compress_support: bool = compress_support
-        self.is_running = True
         self.ws = ws
         self.lock = Lock()
 
         self.socket_event_loop = SelectPool()
 
+    def set_running(self, running: bool):
+        self.socket_event_loop.is_running = running
+
     def start_forward(self):
-        self.socket_event_loop.is_running = True
         self.socket_event_loop.run()
 
     def handle_message(self, each: socket.socket, data: ResisterAppendData):
@@ -143,7 +144,8 @@ class TcpForwardClient:
                     LoggerFactory.get_logger().error(traceback.format_exc())
             self.uid_to_socket_connection.clear()
             self.socket_to_socket_connection.clear()
-            self.is_running = False
+            self.set_running(False)
+            self.socket_event_loop.clear()
 
     def close_remote_socket(self, connection: PrivateSocketConnection):
         # if name is None:

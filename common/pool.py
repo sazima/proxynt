@@ -28,6 +28,11 @@ class SelectPool:
     def stop(self):
         self.is_running = False
 
+    def clear(self):
+        self.fileno_to_client.clear()
+        self.waiting_register_socket.clear()
+        self.socket_to_lock.clear()
+
     def register(self, s: socket.socket, data: ResisterAppendData):
         self.socket_to_lock[s] = threading.Lock()
         self.fileno_to_client[s.fileno()] = s
@@ -89,7 +94,10 @@ class SelectPool:
             self.socket_to_lock.pop(s)
 
     def run(self):
-        while self.is_running:
+        while True:
+            if not self.is_running:
+                time.sleep(1)
+                continue
             # if not self.fileno_to_client:
             #     continue
             try:
