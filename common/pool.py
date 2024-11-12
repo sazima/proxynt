@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from selectors import DefaultSelector, EVENT_READ
 
 import socket
@@ -14,6 +15,7 @@ from constant.system_constant import SystemConstant
 """
 这里只监听了 socket  的可读状态 
 """
+max_workers = 50
 
 
 class SelectPool:
@@ -24,6 +26,8 @@ class SelectPool:
         self.selector = DefaultSelector()
         self.waiting_register_socket: Set = set()
         self.socket_to_lock: Dict[socket.socket, threading.Lock] = {}
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)  # 线程池
+        self.processing_sockets = set()  # 记录正在处理的socket
 
     def stop(self):
         self.is_running = False
@@ -115,12 +119,20 @@ class SelectPool:
                         LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
                         continue
                     data: ResisterAppendData = key.data
-                    try:
-                        data.callable_(client, data)
-                    except Exception:
-                        LoggerFactory.get_logger().error(traceback.format_exc())
+                    # 检查是否正在处理该socket
+                    if client in self.processing_sockets:
                         continue
-                    # self.call_back_function[0](client)
+                    self.processing_sockets.add(client)
+                    self.executor.submit(self._handle_client, client, data)
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
                 time.sleep(1)
+
+    def _handle_client(self, client, data):
+        try:
+            data.callable_(client, data)
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+        finally:
+            # 任务完成后移除标记
+            self.processing_sockets.remove(client)
