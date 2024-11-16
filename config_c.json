@@ -1,8 +1,7 @@
 {
   "server": {
-    "url": "ws://192.168.9.224:18888/websocket_path",
-    "password": "helloworld",
-    "compress": true
+    "url": "ws://127.0.0.1:18888/websocket_path",
+    "password": "helloworld"
   },
   "client_name": "windows10_sql",
   "log_file": "/var/log/nt/nt.log"

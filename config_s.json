@@ -3,6 +3,7 @@
     "password": "helloworld",
     "path": "/websocket_path",
     "log_file": "/var/log/nt/nt.log",
+    "default_expand_all": false,
     "admin": {
         "enable": true,
         "admin_password": "new_password"

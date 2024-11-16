@@ -79,6 +79,8 @@ class AdminHttpApiHandler(RequestHandler):
                 return
             online_client_name_list: List[str] = list(MyWebSocketaHandler.client_name_to_handler.keys())
             return_list = []
+            server_config = ContextUtils.get_server_config()
+            expand_all = server_config.get('default_expand_all', False)
             client_name_to_config_list_in_server = ContextUtils.get_client_name_to_config_in_server()
             online_set: Set[str] = set()
             for client_name in online_client_name_list:
@@ -95,6 +97,7 @@ class AdminHttpApiHandler(RequestHandler):
                     'config_list': config_list,
                     'status': 'online',
                     'version': handler.version,
+                    'expand': expand_all,
                     'can_delete_names': [x['name'] for x in client_name_to_config_list_in_server.get(client_name, [])]
                     # 配置在服务器上的, 可以删除
                 })
@@ -108,6 +111,7 @@ class AdminHttpApiHandler(RequestHandler):
                     'config_list': config_list,
                     'version': '',
                     'status': 'offline',
+                    'expand': expand_all,
                     'can_delete_names': [x['name'] for x in client_name_to_config_list_in_server.get(client_name, [])]
                 })
             return_list.sort(key=lambda x: x['client_name'])
