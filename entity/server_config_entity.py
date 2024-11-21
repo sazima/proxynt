@@ -21,4 +21,6 @@ class ServerConfigEntity(TypedDict):
     log_file: str
     admin: AdminEntity
 
+    default_expand_all: bool
+
     client_config: Dict[str, List[_ClientEntity]]  # 在服务端配置的

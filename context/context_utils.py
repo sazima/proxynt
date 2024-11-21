@@ -2,6 +2,7 @@ from typing import List, Dict
 
 from entity.message.push_config_entity import ClientData
 from entity.server_config_entity import AdminEntity
+from entity.server_config_entity import ServerConfigEntity
 
 c = {}
 
@@ -17,6 +18,8 @@ class ContextUtils:
     _config_file_path = '_config_file_path'
     _client_name_to_config_in_server = '_client_name_to_config_in_server'
     _nonce_to_timestamp = '_nonce_to_timestamp'
+
+    _server_config = '_server_config'  # 服务端配置
 
     @classmethod
     def get_password(cls) -> str:
@@ -97,3 +100,11 @@ class ContextUtils:
     @classmethod
     def set_nonce_to_time(cls, data:  Dict[bytes, int]):
         c[cls._nonce_to_timestamp] = data
+
+    @classmethod
+    def get_server_config(cls) -> ServerConfigEntity:
+        return c[cls._server_config]
+
+    @classmethod
+    def set_server_config(cls, s: ServerConfigEntity):
+        c[cls._server_config] = s

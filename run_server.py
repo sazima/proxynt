@@ -96,6 +96,7 @@ def main():
     print('github: ', SystemConstant.GITHUB)
     signal.signal(signal.SIGINT, signal_handler)
     server_config = load_config()
+    ContextUtils.set_server_config(server_config)
     ContextUtils.set_cookie_to_time({})
     ContextUtils.set_nonce_to_time({})
     ContextUtils.set_password(server_config['password'])

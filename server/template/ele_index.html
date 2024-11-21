@@ -6,6 +6,7 @@
             :data="tableData"
             medium="medium"
             row-key="client_name"
+            :expand-row-keys="expands"
             style="width: 90%; margin: 0 auto">
         <el-table-column type="expand">
             <template slot-scope="props">
@@ -123,6 +124,7 @@
         delimiters: ['{[', ']}'], // 这句可以指定 {[ ]} 为插值表达式的新符号
         data() {
             return {
+                expands: [],
                 tableData: [{client_name: 'ssh'}],
                 dialogFormVisible: false,
                 formLabelWidth: '120px',
@@ -139,7 +141,7 @@
             }
         },
         mounted() {
-            this.getClientList()
+            this.getClientList(true)
             this.intervalTask = setInterval(this.getClientList, 6000)
         },
         beforeDestroy() {
@@ -217,7 +219,7 @@
 
 
             },
-            getClientList() {
+            getClientList(updateExpand) {
                 var url = window.location.href.split('?')[0] + '/api'
                 axios.get(url, {
                     headers: {token: localStorage.getItem('token')}
@@ -233,6 +235,14 @@
                         }
                     }
                     this.tableData = res.data.data
+                    if (updateExpand) {
+                        this.tableData.forEach(item => {
+                            const {client_name, expand} = item
+                            if (expand) {
+                                this.expands.push(client_name)
+                            }
+                        });
+                    }
                     console.log(this.tableData)
                 }).catch(err => {
                     console.log(err)
