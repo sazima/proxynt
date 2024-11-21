@@ -16,7 +16,7 @@ from constant.system_constant import SystemConstant
 """
 这里只监听了 socket  的可读状态 
 """
-max_workers = 50
+max_workers = 99
 
 
 class SelectPool:
@@ -28,8 +28,7 @@ class SelectPool:
         self.waiting_register_socket: Set = set()
 
         self.socket_to_lock: Dict[socket.socket, threading.Lock] = dict()
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)  # 线程池
-        self.processing_sockets = set()  # 记录正在处理的socket
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)  #
 
     def stop(self):
         self.is_running = False
@@ -119,13 +118,9 @@ class SelectPool:
                         LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
                         continue
                     data: ResisterAppendData = key.data
-                    if client not in self.socket_to_lock:
-                        print(self.socket_to_lock)
-                        continue
-                    with self.socket_to_lock[client]:
-                        if client in self.processing_sockets:
-                            continue
-                        self.processing_sockets.add(client)
+                    self.selector.unregister(client)  # register 防止一直就绪状态 耗cpu
+                    if not self.socket_to_lock[client].acquire(blocking=False):
+                        continue  # 已被其他线程处理，跳过
                     self.executor.submit(self._handle_client, client, data)
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
@@ -137,5 +132,5 @@ class SelectPool:
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
         finally:
-            with self.socket_to_lock[client]:
-                self.processing_sockets.remove(client)
+            self.socket_to_lock[client].release()
+            self.selector.register(client, EVENT_READ, data)
