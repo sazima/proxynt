@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from selectors import DefaultSelector, EVENT_READ
 
@@ -25,7 +26,8 @@ class SelectPool:
         self.fileno_to_client: Dict[int, socket.socket] = dict()
         self.selector = DefaultSelector()
         self.waiting_register_socket: Set = set()
-        self.socket_to_lock: Dict[socket.socket, threading.Lock] = {}
+
+        self.socket_to_lock: Dict[socket.socket, threading.Lock] = dict()
         self.executor = ThreadPoolExecutor(max_workers=max_workers)  # 线程池
         self.processing_sockets = set()  # 记录正在处理的socket
 
@@ -102,8 +104,6 @@ class SelectPool:
             if not self.is_running:
                 time.sleep(1)
                 continue
-            # if not self.fileno_to_client:
-            #     continue
             try:
                 try:
                     ready = self.selector.select(timeout=SystemConstant.DEFAULT_TIMEOUT)
@@ -119,10 +119,13 @@ class SelectPool:
                         LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
                         continue
                     data: ResisterAppendData = key.data
-                    # 检查是否正在处理该socket
-                    if client in self.processing_sockets:
+                    if client not in self.socket_to_lock:
+                        print(self.socket_to_lock)
                         continue
-                    self.processing_sockets.add(client)
+                    with self.socket_to_lock[client]:
+                        if client in self.processing_sockets:
+                            continue
+                        self.processing_sockets.add(client)
                     self.executor.submit(self._handle_client, client, data)
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
@@ -134,5 +137,5 @@ class SelectPool:
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
         finally:
-            # 任务完成后移除标记
-            self.processing_sockets.remove(client)
+            with self.socket_to_lock[client]:
+                self.processing_sockets.remove(client)
