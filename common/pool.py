@@ -139,8 +139,12 @@ class SelectPool:
                         self.selector.register(client, EVENT_READ, data)
                     except Exception as e:
                         LoggerFactory.get_logger().warning(f'register error {e}')
+                else:
+                    LoggerFactory.get_logger().warning(f'client not in lock')
                 if lock.locked():
                     lock.release()
+                else:
+                    LoggerFactory.get_logger().warning(f'lock not in lock')
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
 
