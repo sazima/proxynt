@@ -118,19 +118,29 @@ class SelectPool:
                         LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
                         continue
                     data: ResisterAppendData = key.data
+                    lock = self.socket_to_lock[client]
                     self.selector.unregister(client)  # register 防止一直就绪状态 耗cpu
-                    if not self.socket_to_lock[client].acquire(blocking=False):
+                    if not lock.acquire(blocking=False):
                         continue  # 已被其他线程处理，跳过
-                    self.executor.submit(self._handle_client, client, data)
+                    self.executor.submit(self._handle_client, client, data, lock)
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
                 time.sleep(1)
 
-    def _handle_client(self, client, data):
+    def _handle_client(self, client, data, lock: threading.Lock):
         try:
             data.callable_(client, data)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
         finally:
-            self.socket_to_lock[client].release()
-            self.selector.register(client, EVENT_READ, data)
+            try:
+                if client in self.socket_to_lock:
+                    try:
+                        self.selector.register(client, EVENT_READ, data)
+                    except Exception as e:
+                        LoggerFactory.get_logger().warning(f'register error {e}')
+                if lock.locked():
+                    lock.release()
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
+
