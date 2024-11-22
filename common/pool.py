@@ -119,10 +119,10 @@ class SelectPool:
                         continue
                     data: ResisterAppendData = key.data
                     lock = self.socket_to_lock[client]
-                    self.selector.unregister(client)  # register 防止一直就绪状态 耗cpu
                     if not lock.acquire(blocking=False):
                         LoggerFactory.get_logger().warning(f'lock continue')
                         continue  # 已被其他线程处理，跳过
+                    self.selector.unregister(client)  # register 防止一直就绪状态 耗cpu
                     self.executor.submit(self._handle_client, client, data, lock)
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
