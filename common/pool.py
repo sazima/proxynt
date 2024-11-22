@@ -121,6 +121,7 @@ class SelectPool:
                     lock = self.socket_to_lock[client]
                     if not lock.acquire(blocking=False):
                         LoggerFactory.get_logger().warning(f'lock continue')
+                        time.sleep(.005)
                         continue  # 已被其他线程处理，跳过
                     self.selector.unregister(client)  # register 防止一直就绪状态 耗cpu
                     self.executor.submit(self._handle_client, client, data, lock)
@@ -135,6 +136,7 @@ class SelectPool:
             LoggerFactory.get_logger().error(traceback.format_exc())
         finally:
             try:
+                start = time.time()
                 if client in self.socket_to_lock:
                     try:
                         self.selector.register(client, EVENT_READ, data)
@@ -146,6 +148,7 @@ class SelectPool:
                     lock.release()
                 else:
                     LoggerFactory.get_logger().warning(f'lock not in lock')
+                LoggerFactory.get_logger().warning(f'register cost {time.time() - start} seconds')
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
 
