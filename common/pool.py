@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import threading
 import time
@@ -77,6 +78,9 @@ class SelectPool:
                 LoggerFactory.get_logger().error(traceback.format_exc())
             threading.Timer(delay_time, _register_again).start()
 
+    async def async_unregister(self, s: socket.socket):
+        await asyncio.get_event_loop().run_in_executor(self.executor, self.unregister, s)
+
     def unregister(self, s: socket.socket):
         if s not in self.socket_to_lock:
             LoggerFactory.get_logger().info('not register socket, skip')
@@ -120,7 +124,8 @@ class SelectPool:
                     data: ResisterAppendData = key.data
                     lock = self.socket_to_lock[client]
                     if not lock.acquire(blocking=False):
-                        LoggerFactory.get_logger().warning(f'lock continue')
+                        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                            LoggerFactory.get_logger().debug(f'lock continue')
                         time.sleep(.005)
                         continue  # 已被其他线程处理，跳过
                     self.selector.unregister(client)  # register 防止一直就绪状态 耗cpu
@@ -148,7 +153,8 @@ class SelectPool:
                     lock.release()
                 else:
                     LoggerFactory.get_logger().warning(f'lock not in lock')
-                LoggerFactory.get_logger().warning(f'register cost {time.time() - start} seconds')
+                # if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                #     LoggerFactory.get_logger().debug(f'register cost {time.time() - start} seconds')
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
 
