@@ -144,8 +144,18 @@ class SelectPool:
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
         finally:
-            if client in self.socket_to_register_lock and not self.socket_to_register_lock[client].locked():
-                self.selector.register(client, EVENT_READ, data)
+            lock = self.socket_to_register_lock.get(client)
+            if lock is not None:
+                if not lock.acquire(blocking=True):  # 正在锁，跳过
+                    return
+                try:
+                    if client not in self.socket_to_register_lock:
+                        return
+                    self.selector.register(client, EVENT_READ, data)
+                except Exception:
+                    LoggerFactory.get_logger().error(traceback.format_exc())
+                finally:
+                    lock.release()
             # self.
             # if client in self.socket_to_recv_lock:
             #     self.socket_to_recv_lock[client].release()
