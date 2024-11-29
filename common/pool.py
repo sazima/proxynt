@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import threading
 import time
@@ -27,7 +28,8 @@ class SelectPool:
         self.selector = DefaultSelector()
         self.waiting_register_socket: Set = set()
 
-        self.socket_to_lock: Dict[socket.socket, threading.Lock] = dict()
+        self.socket_to_register_lock: Dict[socket.socket, threading.Lock] = dict()
+        self.socket_to_recv_lock: Dict[socket.socket, threading.Lock] = dict()
         self.executor = ThreadPoolExecutor(max_workers=max_workers)  #
 
     def stop(self):
@@ -36,10 +38,12 @@ class SelectPool:
     def clear(self):
         self.fileno_to_client.clear()
         self.waiting_register_socket.clear()
-        self.socket_to_lock.clear()
+        self.socket_to_register_lock.clear()
+        self.socket_to_recv_lock.clear()
 
     def register(self, s: socket.socket, data: ResisterAppendData):
-        self.socket_to_lock[s] = threading.Lock()
+        self.socket_to_register_lock[s] = threading.Lock()
+        self.socket_to_recv_lock[s] = threading.Lock()
         self.fileno_to_client[s.fileno()] = s
         self.selector.register(s, EVENT_READ, data)
 
@@ -48,7 +52,7 @@ class SelectPool:
 
         def _register_again():
             try:
-                if s not in self.socket_to_lock:
+                if s not in self.socket_to_register_lock:
                     return
                 is_exceed, remain = data.speed_limiter.is_exceed()
                 if is_exceed:
@@ -57,7 +61,7 @@ class SelectPool:
                         LoggerFactory.get_logger().debug('delay register again, maybe next: %.2f seconds "  ' % (remain / data.speed_limiter.max_speed))
                     threading.Timer(delay_time, _register_again).start()
                     return
-                with self.socket_to_lock[s]:
+                with self.socket_to_register_lock[s]:
                     if s in self.waiting_register_socket:  # 在等待列表中
                         self.waiting_register_socket.remove(s)
                         self.register(s, data)
@@ -67,9 +71,9 @@ class SelectPool:
 
         if s in self.waiting_register_socket:  # 不在等待列表中
             return
-        if s not in self.socket_to_lock:
+        if s not in self.socket_to_register_lock:
             return
-        with self.socket_to_lock[s]:
+        with self.socket_to_register_lock[s]:
             try:
                 self.selector.unregister(s)
                 self.waiting_register_socket.add(s)
@@ -77,11 +81,14 @@ class SelectPool:
                 LoggerFactory.get_logger().error(traceback.format_exc())
             threading.Timer(delay_time, _register_again).start()
 
+    async def async_unregister(self, s: socket.socket):
+        await asyncio.get_event_loop().run_in_executor(self.executor, self.unregister, s)
+
     def unregister(self, s: socket.socket):
-        if s not in self.socket_to_lock:
+        if s not in self.socket_to_register_lock:
             LoggerFactory.get_logger().info('not register socket, skip')
             return
-        with self.socket_to_lock[s]:
+        with self.socket_to_register_lock[s]:
             if s in self.waiting_register_socket:
                 self.waiting_register_socket.remove(s)
             if s.fileno() in self.fileno_to_client:
@@ -96,7 +103,8 @@ class SelectPool:
                 pass
             except OSError:
                 LoggerFactory.get_logger().error(traceback.format_exc())
-            self.socket_to_lock.pop(s)
+            self.socket_to_register_lock.pop(s)
+            self.socket_to_recv_lock.pop(s)
 
     def run(self):
         while True:
@@ -118,9 +126,13 @@ class SelectPool:
                         LoggerFactory.get_logger().warn(f'key error, {fileno}, self.fileno_to_client: {self.fileno_to_client}')
                         continue
                     data: ResisterAppendData = key.data
+                    # lock = self.socket_to_recv_lock[client]
+                    # if not lock.acquire(blocking=False):
+                    #     if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                    #         LoggerFactory.get_logger().debug(f'lock continue')
+                    #     time.sleep(.005)
+                    #     continue  # 已被其他线程处理，跳过
                     self.selector.unregister(client)  # register 防止一直就绪状态 耗cpu
-                    if not self.socket_to_lock[client].acquire(blocking=False):
-                        continue  # 已被其他线程处理，跳过
                     self.executor.submit(self._handle_client, client, data)
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
@@ -132,5 +144,38 @@ class SelectPool:
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
         finally:
-            self.socket_to_lock[client].release()
-            self.selector.register(client, EVENT_READ, data)
+            lock = self.socket_to_register_lock.get(client)
+            if lock is not None:
+                if not lock.acquire(blocking=True):  # 正在锁，跳过
+                    return
+                try:
+                    if client not in self.socket_to_register_lock:
+                        return
+                    self.selector.register(client, EVENT_READ, data)
+                except Exception:
+                    LoggerFactory.get_logger().error(traceback.format_exc())
+                finally:
+                    lock.release()
+            # self.
+            # if client in self.socket_to_recv_lock:
+            #     self.socket_to_recv_lock[client].release()
+
+        #     try:
+        #         start = time.time()
+        #         if client in self.socket_to_register_lock:
+        #             with self.socket_to_register_lock[client]:
+        #                 try:
+        #                     self.selector.register(client, EVENT_READ, data)
+        #                 except Exception as e:
+        #                     LoggerFactory.get_logger().warning(f'register error {e}')
+        #         else:
+        #             LoggerFactory.get_logger().warning(f'client not in lock')
+        #         if lock.locked():
+        #             lock.release()
+        #         else:
+        #             LoggerFactory.get_logger().warning(f'lock not in lock')
+        #         # if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+        #         #     LoggerFactory.get_logger().debug(f'register cost {time.time() - start} seconds')
+        #     except Exception:
+        #         LoggerFactory.get_logger().error(traceback.format_exc())
+        #

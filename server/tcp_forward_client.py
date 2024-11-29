@@ -103,13 +103,13 @@ class TcpForwardClient:
                 server_socket_list.append(server)
             for c in client_connection_list:
                 c.socket.close()
-                self.socket_event_loop.unregister(c.socket)
+                await self.socket_event_loop.async_unregister(c.socket)
                 self.socket_to_connection.pop(c.socket)
                 self.uid_to_connection.pop(c.uid)
             for s in server_socket_list:
                 self.listen_socket_to_public_server.pop(s.socket_server)
                 try:
-                    self.socket_event_loop.unregister(s.socket_server)
+                    await self.socket_event_loop.async_unregister(s.socket_server)
                     s.socket_server.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass

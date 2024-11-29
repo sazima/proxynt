@@ -170,6 +170,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if self.client_name in self.client_name_to_handler:
                         self.client_name_to_handler.pop(self.client_name)
                     await TcpForwardClient.get_instance().close_by_client_name(self.client_name)
+            LoggerFactory.get_logger().info(f'close {self.client_name}, success')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise
