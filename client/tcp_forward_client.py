@@ -1,4 +1,5 @@
 import logging
+import queue
 import socket
 import threading
 import time
@@ -17,13 +18,49 @@ from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
 
+class MessageSender:
+
+    def __init__(self, ws):
+        self.message_queue = queue.Queue()
+        self.ws = ws
+        self.running = False
+        self.sender_thread = threading.Thread(target=self.send_messages)
+
+    def send_messages(self):
+        while self.running:
+            try:
+                send_bytes = self.message_queue.get(timeout=1)  # 设置超时避免阻塞线程
+                self.ws.send(send_bytes, opcode=websocket.ABNF.OPCODE_BINARY)
+                self.message_queue.task_done()
+            except queue.Empty:
+                continue
+            except Exception as e:
+                LoggerFactory.get_logger().error(f"Failed to send message: {e}")
+                self.message_queue.task_done()
+
+    def enqueue_message(self, message):
+        if self.running:
+            self.message_queue.put(message)
+        else:
+            LoggerFactory.get_logger().warning("WebSocket is not running. Cannot enqueue message.")
+
+    def start(self):
+        self.running = True
+        self.sender_thread.start()
+
+    def stop(self):
+        self.running = False
+
+
 class PrivateSocketConnection:
     """连接内网端口的客户端"""
 
-    def __init__(self, uid: bytes, s: socket.socket, name: str):
+    def __init__(self, uid: bytes, s: socket.socket, name: str, ws):
         self.uid: bytes = uid
         self.socket: socket.socket = s
         self.name: str = name
+        self.sender = MessageSender(ws)
+        self.sender.start()
 
 
 class TcpForwardClient:
@@ -33,7 +70,6 @@ class TcpForwardClient:
         self.compress_support: bool = compress_support
         self.ws = ws
         self.lock = Lock()
-
         self.socket_event_loop = SelectPool()
 
     def set_running(self, running: bool):
@@ -66,7 +102,8 @@ class TcpForwardClient:
             }
         }
         start_time = time.time()
-        threading.Thread(target=self.ws.send, args=(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)).start()
+        connection.sender.enqueue_message(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support))
+        # self.sender.enqueue_message(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support))
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to ws  uid: {connection.uid} len {len(recv)} , cost time {time.time() - start_time}')
         if not recv:
@@ -87,8 +124,7 @@ class TcpForwardClient:
                     LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(5)
-
-                connection = PrivateSocketConnection(uid, s, name)
+                connection = PrivateSocketConnection(uid, s, name, self.ws)
                 self.socket_to_socket_connection[s] = connection
                 ip, port = ip_port.split(':')
                 try:
@@ -121,6 +157,7 @@ class TcpForwardClient:
             except OSError as e:
                 LoggerFactory.get_logger().warn(f'shutdown OS error {e}')
             socket_client.close()
+            connection.sender.stop()
             LoggerFactory.get_logger().info(f'close success {socket_client}')
             if connection.uid in self.uid_to_socket_connection:
                 self.uid_to_socket_connection.pop(connection.uid)
@@ -143,6 +180,7 @@ class TcpForwardClient:
                     s.close()
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
+                c.sender.stop()
             self.uid_to_socket_connection.clear()
             self.socket_to_socket_connection.clear()
             self.set_running(False)
