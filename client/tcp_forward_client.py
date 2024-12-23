@@ -1,5 +1,6 @@
 import logging
 import socket
+import threading
 import time
 import traceback
 from threading import Lock
@@ -65,7 +66,7 @@ class TcpForwardClient:
             }
         }
         start_time = time.time()
-        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+        threading.Thread(target=self.ws.send, args=(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)).start()
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to ws  uid: {connection.uid} len {len(recv)} , cost time {time.time() - start_time}')
         if not recv:
