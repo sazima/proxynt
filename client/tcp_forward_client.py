@@ -27,7 +27,7 @@ class MessageSender:
         self.sender_thread = threading.Thread(target=self.send_messages)
 
     def send_messages(self):
-        while self.running:
+        while self.running or not self.message_queue.empty():
             try:
                 send_bytes = self.message_queue.get(timeout=1)  # 设置超时避免阻塞线程
                 self.ws.send(send_bytes, opcode=websocket.ABNF.OPCODE_BINARY)
@@ -49,7 +49,17 @@ class MessageSender:
         self.sender_thread.start()
 
     def stop(self):
-        self.running = False
+        def safe_stop():
+            while not self.message_queue.empty():
+                try:
+                    message = self.message_queue.get_nowait()
+                    self.ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
+                except queue.Empty:
+                    break
+                finally:
+                    self.message_queue.task_done()
+            self.running = False
+        safe_stop()
 
 
 class PrivateSocketConnection:
