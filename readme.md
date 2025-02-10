@@ -28,6 +28,18 @@ pip install -U proxynt
 ```
 如果需要安装安卓端 [点击](https://github.com/sazima/proxynt_android)
 
+### Docker
+```bash
+mkdir -p ~/app/proxynt && cd ~/app/proxynt
+wget https://raw.githubusercontent.com/Limour-dev/proxynt/refs/heads/master/docker-compose.yml
+wget -O config.json https://raw.githubusercontent.com/sazima/proxynt/refs/heads/master/config_s.json
+```
++ 编辑配置文件 `nano config.json`
++ 启动服务 `sudo docker compose up -d`
++ Nginx 反向代理 ws 路径:
+
+![](https://github.com/user-attachments/assets/215776be-3f96-4a95-a2a1-2322d9f9107e)
+
 ## 使用示例, 通过 SSH 访问内网机器
 
 假设公网机器的ip是 `192.168.9.224`
