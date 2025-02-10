@@ -1,0 +1,13 @@
+version: '3.3'
+services:
+  proxynt:
+    restart: unless-stopped
+    volumes:
+      - './config.json:/opt/config.json'
+      - '/etc/localtime:/etc/localtime:ro'
+    image: limour/proxynt
+ 
+networks:
+  default:
+    external: true
+    name: ngpm
