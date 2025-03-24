@@ -82,7 +82,23 @@ class SelectPool:
             threading.Timer(delay_time, _register_again).start()
 
     async def async_unregister(self, s: socket.socket):
-        await asyncio.get_event_loop().run_in_executor(self.executor, self.unregister, s)
+        """添加超时机制的异步取消注册"""
+        try:
+            await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(self.executor, self.unregister, s),
+                timeout=5  # 5秒超时
+            )
+        except asyncio.TimeoutError:
+            LoggerFactory.get_logger().error(f"Timeout unregistering socket {s}")
+            # 强制从跟踪字典中移除
+            if s.fileno() in self.fileno_to_client:
+                self.fileno_to_client.pop(s.fileno())
+            if s in self.socket_to_register_lock:
+                self.socket_to_register_lock.pop(s)
+            if s in self.socket_to_recv_lock:
+                self.socket_to_recv_lock.pop(s)
+            if s in self.waiting_register_socket:
+                self.waiting_register_socket.remove(s)
 
     def unregister(self, s: socket.socket):
         if s not in self.socket_to_register_lock:
@@ -103,8 +119,10 @@ class SelectPool:
                 pass
             except OSError:
                 LoggerFactory.get_logger().error(traceback.format_exc())
-            self.socket_to_register_lock.pop(s)
-            self.socket_to_recv_lock.pop(s)
+            if s in self.socket_to_register_lock:
+                self.socket_to_register_lock.pop(s)
+            if s in self.socket_to_recv_lock:
+                self.socket_to_recv_lock.pop(s)
 
     def run(self):
         while True:
