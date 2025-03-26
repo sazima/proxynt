@@ -9,7 +9,7 @@ class ClientData(TypedDict):
     local_port: int
     local_ip: str
     speed_limit: float
-
+    protocol: str  # tcp or udp
 
 class PushConfigEntity(TypedDict):
     key: str

@@ -182,10 +182,20 @@ class AdminHttpApiHandler(RequestHandler):
             client_name = request_data.get('client_name')
             name = request_data.get('name')
             remote_port = int(request_data.get('remote_port'))
-            is_edit = request_data.get('is_edit', False)  # 是否是编辑
+            is_edit = request_data.get('is_edit', False)
             local_ip = request_data.get('local_ip')
             local_port = int(request_data.get('local_port'))
             speed_limit = float(request_data.get('speed_limit'))
+            protocol = request_data.get('protocol', 'tcp')  # 获取协议类型，默认为TCP
+
+            # 验证protocol是否合法
+            if protocol not in ['tcp', 'udp']:
+                self.write({
+                    'code': 400,
+                    'data': '',
+                    'msg': '协议类型不合法，只支持tcp和udp'
+                })
+                return
             if not client_name:
                 self.write({
                     'code': 400,
@@ -229,9 +239,9 @@ class AdminHttpApiHandler(RequestHandler):
                 })
                 return
             if not is_edit:
-                is_ok, msg = self._add(client_name, name, remote_port, local_port, local_ip, speed_limit)
+                is_ok, msg = self._add(client_name, name, remote_port, local_port, local_ip, speed_limit, protocol)
             else:
-                is_ok, msg = self._edit(client_name, name, remote_port, local_port, local_ip, speed_limit)
+                is_ok, msg = self._edit(client_name, name, remote_port, local_port, local_ip, speed_limit, protocol)
             if not is_ok:
                 self.write({
                     'code': 400,
@@ -251,7 +261,7 @@ class AdminHttpApiHandler(RequestHandler):
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
-    def _edit(self, client_name: str, name: str, remote_port: int, local_port: int, local_ip: str, speed_limit: float) -> Tuple[bool, str]:
+    def _edit(self, client_name: str, name: str, remote_port: int, local_port: int, local_ip: str, speed_limit: float, protocol: str) -> Tuple[bool, str]:
         client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
         if client_name not in client_name_to_config_in_server:
             return True,  '该客户端名称不存在'
@@ -264,10 +274,11 @@ class AdminHttpApiHandler(RequestHandler):
                 c['remote_port'] = remote_port
                 c['local_port'] = local_port
                 c['speed_limit'] = speed_limit
+                c['protocol'] = protocol  # 更新协议类型
                 return True, ''
         return False, '编辑的名称不存在'
 
-    def _add(self, client_name: str, name: str, remote_port: int, local_port: int, local_ip: str, speed_limit: float ) -> Tuple[bool, str]:
+    def _add(self, client_name: str, name: str, remote_port: int, local_port: int, local_ip: str, speed_limit: float, protocol: str ) -> Tuple[bool, str]:
         client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
         if client_name in MyWebSocketaHandler.client_name_to_handler:
             handler = MyWebSocketaHandler.client_name_to_handler[client_name]
@@ -283,7 +294,8 @@ class AdminHttpApiHandler(RequestHandler):
             'remote_port': remote_port,
             'local_port': local_port,
             'local_ip': local_ip,
-            'speed_limit': speed_limit
+            'speed_limit': speed_limit,
+            'protocol': protocol  # 添加协议类型
         }
         if client_name in client_name_to_config_in_server:
             for c in client_name_to_config_in_server[client_name]:
