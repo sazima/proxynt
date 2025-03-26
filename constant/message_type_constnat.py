@@ -8,3 +8,5 @@ class MessageTypeConstant:
 
     PING = '4'
 
+    WEBSOCKET_OVER_UDP = '6'
+    REQUEST_TO_CONNECT_UDP = '7'

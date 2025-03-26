@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from json import JSONDecodeError
 from typing import List, Dict, Set
 
+from server.udp_forward_client import UdpForwardClient
+
 try:
     import snappy
     has_snappy = True
@@ -100,6 +102,24 @@ class MyWebSocketaHandler(WebSocketHandler):
                 data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
                 uid = data['uid']
                 await tcp_forward_client.send_to_socket(uid, data['data'])
+            elif message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_UDP:
+                data: TcpOverWebsocketMessage = message_dict['data']  # UDP消息
+                uid = data['uid']
+                port = 0
+
+                # 查找对应的端口号
+                for p, srv in list(UdpForwardClient.get_instance().udp_servers.items()):
+                    for endpoint_uid, endpoint in srv.uid_to_endpoint.items():
+                        if endpoint_uid == uid:
+                            port = p
+                            break
+                    if port != 0:
+                        break
+
+                if port != 0:
+                    await UdpForwardClient.get_instance().send_udp(uid, data['data'], port)
+                else:
+                    LoggerFactory.get_logger().warning(f"未找到UID {uid} 对应的UDP端口")
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
                     LoggerFactory.get_logger().info(f'get push config: {message_dict}')
@@ -133,18 +153,34 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.client_name = client_name
                     self.names = name_set
                     listen_socket_list = []
+                    udp_servers_list = []
                     for d in data:
-                        try:
-                            listen_socket = tcp_forward_client.create_listen_socket(d['remote_port'])
-                        except OSError:
-                            self.close(None, 'Address already in use')
-                            # tcp_forward_client.close_by_client_name(self.client_name)
-                            raise
-                        ip_port = d['local_ip'] + ':' + str(d['local_port'])
-                        d.setdefault('speed_limit', 0)
-                        speed_limit: float = d.get('speed_limit', 0)  # 网速限制
-                        await tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self, speed_limit)
-                        listen_socket_list.append(listen_socket)
+                        protocol = d.get('protocol', 'tcp')
+                        d.setdefault('protocol', protocol)
+                        if protocol.lower() == 'tcp':
+                            try:
+                                listen_socket = tcp_forward_client.create_listen_socket(d['remote_port'])
+                            except OSError:
+                                self.close(None, 'Address already in use')
+                                # tcp_forward_client.close_by_client_name(self.client_name)
+                                raise
+                            ip_port = d['local_ip'] + ':' + str(d['local_port'])
+                            d.setdefault('speed_limit', 0)
+                            speed_limit: float = d.get('speed_limit', 0)  # 网速限制
+                            await tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self, speed_limit)
+                            listen_socket_list.append(listen_socket)
+                        else:
+                            # UDP处理逻辑
+                            ip_port = d['local_ip'] + ':' + str(d['local_port'])
+                            d.setdefault('speed_limit', 0)
+                            speed_limit: float = d.get('speed_limit', 0)  # 网速限制
+                            # 注册UDP服务器
+                            success = await UdpForwardClient.get_instance().register_udp_server(
+                                d['remote_port'], d['name'], ip_port, self, speed_limit)
+                            if not success:
+                                self.close(None, 'UDP端口 {} 已被使用或注册失败'.format(d['remote_port']))
+                                raise Exception(f"UDP端口 {d['remote_port']} 已被使用或注册失败")
+                            LoggerFactory.get_logger().info(f"UDP服务已注册: {d['name']} 在端口 {d['remote_port']}")
                     # self.handler_to_recv_time[self] = time.time()
                     self.recv_time = time.time()
                     self.client_name_to_handler[client_name] = self
@@ -169,7 +205,10 @@ class MyWebSocketaHandler(WebSocketHandler):
                 if self.client_name:
                     if self.client_name in self.client_name_to_handler:
                         self.client_name_to_handler.pop(self.client_name)
+                    # 关闭TCP连接
                     await TcpForwardClient.get_instance().close_by_client_name(self.client_name)
+                    # 关闭UDP连接
+                    await UdpForwardClient.get_instance().close_by_client_name(self.client_name)
             LoggerFactory.get_logger().info(f'close {self.client_name}, success')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())

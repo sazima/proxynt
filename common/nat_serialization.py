@@ -38,7 +38,8 @@ class NatSerialization:
     @classmethod
     def dumps(cls, data: MessageEntity, key: str, compress: bool) -> bytes:
         type_ = data['type_']
-        if type_ in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
+        if type_ in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT,
+                     MessageTypeConstant.WEBSOCKET_OVER_UDP, MessageTypeConstant.REQUEST_TO_CONNECT_UDP):  # 添加UDP消息类型
             data_content: TcpOverWebsocketMessage = data['data']
             uid = data_content['uid']  # 长度r
             name = data_content['name']
@@ -93,7 +94,8 @@ class NatSerialization:
         if not cls.check_signature(byte_data, body_len, key):
             raise SignatureError()
         body = byte_data[HEADER_LEN: body_len + HEADER_LEN]
-        if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT):
+        if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT,
+                              MessageTypeConstant.WEBSOCKET_OVER_UDP, MessageTypeConstant.REQUEST_TO_CONNECT_UDP):  # 添加UDP消息类型
             len_name, len_ip_port, len_bytes = struct.unpack('BBI', body[:8])
             uid, name, ip_port,  socket_dta = struct.unpack(f'4s{len_name}s{len_ip_port}s{len_bytes}s', body[8:])
             if compress and len(socket_dta):

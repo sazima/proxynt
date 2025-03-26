@@ -38,6 +38,17 @@
                             label="限速(单位MB)"
                             width="180">
                     </el-table-column>
+                    <el-table-column
+                            prop="protocol"
+                            label="协议"
+                            width="100">
+                        <template slot-scope="scope">
+                            <el-tag
+                                    :type="scope.row.protocol === 'udp' ? 'warning' : 'primary'"
+                                    disable-transitions>{[ scope.row.protocol || 'tcp' ]}
+                            </el-tag>
+                        </template>
+                    </el-table-column>
                     <el-table-column label="操作" width="200">
 
                         <template slot-scope="scope">
@@ -111,6 +122,20 @@
                     <el-input v-model="form.speed_limit" type='number' autocomplete="off"></el-input>
                 </el-tooltip>
             </el-form-item>
+
+            <el-form-item label="协议" :label-width="formLabelWidth">
+                <el-select v-model="form.protocol" placeholder="请选择">
+                    <el-option
+                            label="TCP"
+                            value="tcp">
+                    </el-option>
+                    <el-option
+                            label="UDP"
+                            value="udp">
+                    </el-option>
+                </el-select>
+            </el-form-item>
+
         </el-form>
         <div slot="footer" class="dialog-footer">
             <el-button @click="dialogFormVisible = false">取 消</el-button>
@@ -156,7 +181,8 @@
                     local_port: '',
                     local_ip: '127.0.0.1',
                     remote_port: '',
-                    speed_limit: 0
+                    speed_limit: 0,
+                    protocol: 'tcp'  // 添加默认协议为TCP
                 }
                 this.form.client_name = row.client_name
                 console.log(row);
@@ -170,7 +196,8 @@
                     local_port: row.local_port,
                     local_ip: row.local_ip,
                     remote_port: row.remote_port,
-                    speed_limit: row.speed_limit
+                    speed_limit: row.speed_limit,
+                    protocol: row.protocol || 'tcp'  // 获取协议类型，默认为TCP
                 }
                 console.log('-------',  row);
                 this.dialogFormVisible = true
