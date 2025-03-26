@@ -200,15 +200,48 @@ class TcpForwardClient:
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to socket uid: {uid}, len: {len(message)}')
         try:
-            await asyncio.get_event_loop().sock_sendall(socket_client, message)
-        except OSError:
-            LoggerFactory.get_logger().warn(f'{uid} os error')
-            pass
+            # 添加超时机制
+            await asyncio.wait_for(asyncio.get_event_loop().sock_sendall(socket_client, message), timeout=30)
+        except asyncio.TimeoutError:
+            LoggerFactory.get_logger().warn(f"Socket send timeout for {uid}, closing connection")
+            # 使用 ensure_future 替代 create_task，兼容 Python 3.6
+            asyncio.ensure_future(self.close_connection_async(connection))
+            return
+        except OSError as e:
+            LoggerFactory.get_logger().warn(f'{uid} os error: {e}')
+            # 使用 ensure_future 替代 create_task，兼容 Python 3.6
+            asyncio.ensure_future(self.close_connection_async(connection))
+            return
         if not message:
-            asyncio.get_event_loop().run_in_executor(None, self.close_connection, connection)
-
+            # 使用异步方式关闭连接
+            asyncio.ensure_future(self.close_connection_async(connection))
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
+
+    async def close_connection_async(self, connection: PublicSocketConnection):
+        """异步关闭连接，避免在事件循环中阻塞"""
+        try:
+            LoggerFactory.get_logger().info(f'async close {connection.uid}')
+            uid = connection.uid
+            if uid not in self.uid_to_connection:
+                return
+            # 从跟踪字典中移除
+            self.uid_to_connection.pop(uid, None)
+            self.socket_to_connection.pop(connection.socket, None)
+            connection.socket_server.delete_client(connection)
+            # 确保在关闭前取消注册
+            try:
+                await self.socket_event_loop.async_unregister(connection.socket)
+            except Exception as e:
+                LoggerFactory.get_logger().error(f'Error unregistering socket: {e}')
+
+            # 关闭套接字
+            try:
+                connection.socket.close()
+            except Exception as e:
+                LoggerFactory.get_logger().error(f'Error closing socket: {e}')
+        except Exception as e:
+            LoggerFactory.get_logger().error(f'close error {e}')
 
     def close_connection(self, connection: PublicSocketConnection):
         try:
