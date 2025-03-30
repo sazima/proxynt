@@ -14,7 +14,6 @@ from typing import List, Set, Dict
 
 import tornado
 
-from client.udp_forward_client import UdpForwardClient
 
 try:
     import snappy
@@ -28,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.speed_limit import SpeedLimiter
 from common.websocket import WebSocketException, ABNF, WebSocketConnectionClosedException
-
+from client.udp_forward_client import UdpForwardClient
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
 from common import websocket
