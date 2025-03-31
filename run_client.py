@@ -14,6 +14,7 @@ from typing import List, Set, Dict
 
 import tornado
 
+
 try:
     import snappy
     has_snappy = True
@@ -26,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.speed_limit import SpeedLimiter
 from common.websocket import WebSocketException, ABNF, WebSocketConnectionClosedException
-
+from client.udp_forward_client import UdpForwardClient
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
 from common import websocket
@@ -118,21 +119,25 @@ config_c.json example:
 
 
 class WebsocketClient:
-    def __init__(self, ws: websocket.WebSocketApp, tcp_forward_client, heart_beat_task, config_data: ClientConfigEntity):
+    def __init__(self, ws: websocket.WebSocketApp, tcp_forward_client, udp_forward_client, heart_beat_task, config_data: ClientConfigEntity):
         self.ws: websocket.WebSocketApp = ws
         self.ws.on_message = self.on_message
         self.ws.on_close = self.on_close
         self.ws.on_open = self.on_open
         self.forward_client: TcpForwardClient = tcp_forward_client
+        self.udp_forward_client: UdpForwardClient = udp_forward_client  # 新增UDP转发客户端
         self.heart_beat_task: HeatBeatTask = heart_beat_task
         self.config_data: ClientConfigEntity = config_data
         self.compress_support: bool = config_data['server']['compress']
+
 
     def on_message(self, ws, message: bytes):
         try:
             message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support)
             start_time = time.time()
             time_ = message_data['type_']
+
+            # 处理TCP消息
             if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
@@ -141,41 +146,64 @@ class WebsocketClient:
                 create_result = self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
                 if create_result:
                     self.forward_client.send_by_uid(uid, b)
+
+            # 处理TCP连接请求
             elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
                 name = data['name']
                 b = data['data']
                 self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
+
+            # 新增: 处理UDP消息
+            elif message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_UDP:
+                data: TcpOverWebsocketMessage = message_data['data']
+                uid = data['uid']
+                name = data['name']
+                b = data['data']
+                create_result = self.udp_forward_client.create_udp_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
+                if create_result:
+                    self.udp_forward_client.send_by_uid(uid, b)
+
+            # 新增: 处理UDP连接请求
+            elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT_UDP:
+                data: TcpOverWebsocketMessage = message_data['data']
+                uid = data['uid']
+                name = data['name']
+                b = data['data']
+                self.udp_forward_client.create_udp_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
+
+            # 处理心跳和配置推送
             elif message_data['type_'] == MessageTypeConstant.PING:
                 self.heart_beat_task.set_recv_heart_beat_time(time.time())
             elif message_data['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 push_config: PushConfigEntity = message_data['data']
                 for d in push_config['config_list']:
+                    # 设置限速器
                     if d.get('speed_limit'):
                         name_to_speed_limiter[d['name']] = SpeedLimiter(d['speed_limit'])
+
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
         # LoggerFactory.get_logger().debug(f'on message {time_} cost time {time.time() - start_time}')
-
-    def on_error(self, ws, error):
-        LoggerFactory.get_logger().error(f'error:  {error} ')
-
-    def on_close(self, ws, a, b):
-        with OPEN_CLOSE_LOCK:
-            LoggerFactory.get_logger().info(f'close, {a}, {b} ')
-            self.heart_beat_task.is_running = False
-            self.forward_client.close()
 
     def on_open(self, ws):
         with OPEN_CLOSE_LOCK:
             try:
                 LoggerFactory.get_logger().info('close before open..')
-                self.heart_beat_task.is_running = False  #
+                self.heart_beat_task.is_running = False
                 self.forward_client.close()
+                self.udp_forward_client.close()  # 关闭UDP客户端
+
                 LoggerFactory.get_logger().info('open success')
                 push_client_data: List[ClientData] = self.config_data['client']
                 client_name = self.config_data.get('client_name', socket.gethostname())
+
+                # 确保每个配置项都有protocol字段，默认为'tcp'
+                for item in push_client_data:
+                    if 'protocol' not in item:
+                        item['protocol'] = 'tcp'
+
                 push_configs: PushConfigEntity = {
                     'key': ContextUtils.get_password(),
                     'config_list': push_client_data,
@@ -190,10 +218,18 @@ class WebsocketClient:
 
                 ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
                 self.forward_client.set_running(True)
+                self.udp_forward_client.set_running(True)  # 启动UDP客户端
                 self.heart_beat_task.is_running = True
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
+    def on_error(self, ws, error):
+        LoggerFactory.get_logger().error(f'error:  {error} ')
 
+    def on_close(self, ws, a, b):
+        with OPEN_CLOSE_LOCK:
+            LoggerFactory.get_logger().info(f'close, {a}, {b} ')
+            self.heart_beat_task.is_running = False
+            self.forward_client.close()
 
 def signal_handler(sig, frame):
     print('You pressed Ctrl+C!')
@@ -215,6 +251,7 @@ def run_client(ws: websocket.WebSocketApp):
         time.sleep(2)
 
 
+# 修改main函数，初始化UDP客户端
 def main():
     print('github: ', SystemConstant.GITHUB)
     config_data = get_config()
@@ -247,12 +284,14 @@ def main():
             url += '?c=' + json.dumps(compress_support)
     ws = websocket.WebSocketApp(url)
     forward_client = TcpForwardClient(ws, compress_support)
+    udp_forward_client = UdpForwardClient(ws, compress_support)  # 创建UDP转发客户端
     heart_beat_task = HeatBeatTask(ws, SystemConstant.HEART_BEAT_INTERVAL)
-    WebsocketClient(ws, forward_client, heart_beat_task, config_data)
+    WebsocketClient(ws, forward_client, udp_forward_client, heart_beat_task, config_data)  # 传入UDP转发客户端
     LoggerFactory.get_logger().info('start run_forever')
     Thread(target=run_client, args=(ws,)).start()  # 为了使用tornado的ioloop 方便设置超时
     Thread(target=heart_beat_task.run).start()
     Thread(target=forward_client.start_forward).start()
+    # UDP客户端在实例化时会自动启动接收线程，无需额外启动
     ioloop.IOLoop.current().start()
 
 
