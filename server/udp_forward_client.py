@@ -18,16 +18,18 @@ from constant.message_type_constnat import MessageTypeConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
 
+
 class UdpEndpoint:
-    """UDP端点，维护客户端地址到服务端地址的映射"""
+    """UDP endpoint that maintains the mapping between client and server addresses"""
     def __init__(self, uid: bytes, address: Tuple[str, int], server):
         self.uid = uid
         self.address = address
         self.server = server
         self.last_active_time = time.time()
 
+
 class UdpPublicSocketServer:
-    """在公网上监听的UDP端口"""
+    """UDP server listening on a public network port"""
     def __init__(self, s: socket.socket, name: str, ip_port: str, websocket_handler, speed_limit_size: float):
         self.socket_server = s
         self.name = name
@@ -35,13 +37,13 @@ class UdpPublicSocketServer:
         self.websocket_handler = websocket_handler
         self.speed_limit_size = speed_limit_size
         self.speed_limiter = SpeedLimiter(speed_limit_size) if speed_limit_size else None
-        # UDP需要记住每个客户端的地址
+        # UDP must remember each client’s address
         self.addr_to_uid: Dict[str, bytes] = {}
         self.uid_to_endpoint: Dict[bytes, UdpEndpoint] = {}
         self.lock = threading.Lock()
 
     def add_endpoint(self, address: Tuple[str, int]) -> bytes:
-        """添加新的UDP端点，返回生成的UID"""
+        """Add a new UDP endpoint and return the generated UID"""
         addr_key = f"{address[0]}:{address[1]}"
         with self.lock:
             if addr_key in self.addr_to_uid:
@@ -56,12 +58,12 @@ class UdpPublicSocketServer:
             return uid
 
     def get_endpoint_by_uid(self, uid: bytes) -> UdpEndpoint:
-        """通过UID获取UDP端点"""
+        """Get UDP endpoint by UID"""
         with self.lock:
             return self.uid_to_endpoint.get(uid)
 
     def remove_endpoint(self, uid: bytes):
-        """移除UDP端点"""
+        """Remove a UDP endpoint"""
         with self.lock:
             if uid in self.uid_to_endpoint:
                 endpoint = self.uid_to_endpoint[uid]
@@ -71,7 +73,7 @@ class UdpPublicSocketServer:
                 del self.uid_to_endpoint[uid]
 
     def clean_inactive_endpoints(self, max_inactive_time: int = 300):
-        """清理不活跃的端点"""
+        """Clean up inactive endpoints"""
         current_time = time.time()
         with self.lock:
             inactive_uids = []
@@ -82,17 +84,18 @@ class UdpPublicSocketServer:
             for uid in inactive_uids:
                 self.remove_endpoint(uid)
 
+
 class UdpForwardClient:
     _instance = None
 
     def __init__(self, loop=None, tornado_loop=None):
         self.loop = loop or asyncio.get_event_loop()
         self.tornado_loop = tornado_loop or tornado.ioloop.IOLoop.current()
-        self.udp_servers: Dict[int, UdpPublicSocketServer] = {}  # 端口号到服务器实例的映射
+        self.udp_servers: Dict[int, UdpPublicSocketServer] = {}  # Mapping: port number → server instance
         self.client_name_to_udp_server_set: Dict[str, Set[UdpPublicSocketServer]] = {}
         self.client_name_to_lock: Dict[str, AsyncioLock] = {}
         self.running = True
-        # 启动UDP接收线程
+        # Start UDP receive thread
         self.receive_thread = None
 
     @classmethod
@@ -103,53 +106,53 @@ class UdpForwardClient:
         return cls._instance
 
     def start_receive_thread(self):
-        """启动UDP数据接收线程"""
+        """Start the UDP data receiving thread"""
         if self.receive_thread is None:
             self.receive_thread = threading.Thread(target=self._udp_receive_loop)
             self.receive_thread.daemon = True
             self.receive_thread.start()
 
     def _udp_receive_loop(self):
-        """UDP数据接收循环"""
-        LoggerFactory.get_logger().info("UDP接收线程已启动")
+        """UDP data receiving loop"""
+        LoggerFactory.get_logger().info("UDP receive thread start")
         while self.running:
-            # 遍历所有UDP服务器
+            # Iterate over all UDP servers
             for port, server in list(self.udp_servers.items()):
                 try:
-                    # 在非阻塞模式下接收数据，避免阻塞其他服务器
+                    # Use non-blocking mode to avoid blocking other servers
                     server.socket_server.setblocking(False)
                     try:
                         data, address = server.socket_server.recvfrom(65536)
                         if data:
-                            # 处理收到的UDP数据
+                            # Process received UDP data
                             self._handle_udp_data(server, data, address)
                     except (BlockingIOError, socket.error):
-                        # 没有可用数据，继续下一个服务器
+                        # No data available, continue to next server
                         pass
                 except Exception as e:
-                    LoggerFactory.get_logger().error(f"UDP数据接收错误: {e}")
+                    LoggerFactory.get_logger().error(f"UDP receive error: {e}")
                     LoggerFactory.get_logger().error(traceback.format_exc())
 
-            # 防止CPU占用过高
+            # Prevent high CPU usage
             time.sleep(0.001)
 
     def _handle_udp_data(self, server: UdpPublicSocketServer, data: bytes, address: Tuple[str, int]):
-        """处理收到的UDP数据"""
-        # 添加或获取对应的端点
-        LoggerFactory.get_logger().info(f"UDP客户端收到来自 {server.socket_server} 的数据: {len(data)} 字节")
+        """Handle received UDP data"""
+        # Add or get the corresponding endpoint
+        LoggerFactory.get_logger().info(f"UDP received {server.socket_server}, len: {len(data)} bytes")
 
         uid = server.add_endpoint(address)
 
-        # 限速处理
+        # Apply speed limit
         if server.speed_limiter and server.speed_limiter.is_exceed()[0]:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug('UDP超出速度限制')
+                LoggerFactory.get_logger().debug('UDP speed limit reached')
             return
 
         if server.speed_limiter:
             server.speed_limiter.add(len(data))
 
-        # 构造UDP消息并通过WebSocket发送到内网客户端
+        # Construct a UDP message and forward it to the internal client via WebSocket
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_UDP,
             'data': {
@@ -161,31 +164,31 @@ class UdpForwardClient:
         }
 
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-            LoggerFactory.get_logger().debug(f'发送UDP数据到WebSocket，uid: {uid}, 长度: {len(data)}')
+            LoggerFactory.get_logger().debug(f"Send UDP data to WebSocket, uid: {uid}, len: {len(data)}")
 
-        # 在异步循环中执行WebSocket发送
+        # Schedule WebSocket send operation in the async loop
         is_compress = server.websocket_handler.compress_support
         self.tornado_loop.add_callback(
             partial(server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress)), True)
 
     async def register_udp_server(self, port: int, name: str, ip_port: str, websocket_handler, speed_limit_size: float):
-        """注册UDP服务器"""
+        """Register a UDP server"""
         client_name = websocket_handler.client_name
         if client_name not in self.client_name_to_lock:
             self.client_name_to_lock[client_name] = AsyncioLock()
 
         async with self.client_name_to_lock.get(client_name):
             if port in self.udp_servers:
-                LoggerFactory.get_logger().warning(f"UDP端口 {port} 已被使用")
+                LoggerFactory.get_logger().warning(f"UDP port {port} is forbidden")
                 return False
 
             try:
-                # 创建UDP套接字
+                # Create UDP socket
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind(('', port))
 
-                # 创建并注册UDP服务器
+                # Create and register UDP server
                 server = UdpPublicSocketServer(sock, name, ip_port, websocket_handler, speed_limit_size)
                 self.udp_servers[port] = server
 
@@ -193,38 +196,38 @@ class UdpForwardClient:
                     self.client_name_to_udp_server_set[client_name] = set()
 
                 self.client_name_to_udp_server_set[client_name].add(server)
-                LoggerFactory.get_logger().info(f"UDP服务器已注册，端口: {port}, 名称: {name}")
+                LoggerFactory.get_logger().info(f"UDP server registered, port: {port}, name: {name}")
                 return True
             except Exception as e:
-                LoggerFactory.get_logger().error(f"注册UDP服务器失败: {e}")
+                LoggerFactory.get_logger().error(f"UDP registration failed: {e}")
                 LoggerFactory.get_logger().error(traceback.format_exc())
                 return False
 
     async def send_udp(self, uid: bytes, data: bytes, port: int):
-        """向UDP客户端发送数据"""
+        """Send UDP data to a client"""
         if port not in self.udp_servers:
-            LoggerFactory.get_logger().warning(f"未找到端口为 {port} 的UDP服务器")
+            LoggerFactory.get_logger().warning(f"No UDP server found for port {port}")
             return False
 
         server = self.udp_servers[port]
         endpoint = server.get_endpoint_by_uid(uid)
 
         if not endpoint:
-            LoggerFactory.get_logger().warning(f"未找到UID为 {uid} 的UDP端点")
+            LoggerFactory.get_logger().warning(f"No UDP endpoint found for UID {uid}")
             return False
 
         try:
-            # 发送UDP数据
+            # Send UDP data
             bytes_sent = server.socket_server.sendto(data, endpoint.address)
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f"UDP数据发送成功，目标: {endpoint.address}, 长度: {bytes_sent}")
+                LoggerFactory.get_logger().debug(f"UDP data sent successfully, target: {endpoint.address}, length: {bytes_sent}")
             return True
         except Exception as e:
-            LoggerFactory.get_logger().error(f"UDP数据发送失败: {e}")
+            LoggerFactory.get_logger().error(f"UDP data send failed: {e}")
             return False
 
     async def close_by_client_name(self, client_name: str):
-        """关闭指定客户端名称的所有UDP服务器"""
+        """Close all UDP servers associated with a specific client"""
         if client_name not in self.client_name_to_udp_server_set:
             return
 
@@ -234,25 +237,25 @@ class UdpForwardClient:
         async with self.client_name_to_lock.get(client_name):
             for server in list(self.client_name_to_udp_server_set[client_name]):
                 try:
-                    # 找到端口并移除
+                    # Find and remove the corresponding port
                     for port, srv in list(self.udp_servers.items()):
                         if srv == server:
                             del self.udp_servers[port]
                             break
 
-                    # 关闭套接字
+                    # Close socket
                     server.socket_server.close()
                 except Exception as e:
-                    LoggerFactory.get_logger().error(f"关闭UDP服务器失败: {e}")
+                    LoggerFactory.get_logger().error(f"Failed to close UDP server: {e}")
 
-            # 清理集合
+            # Clean up server set
             self.client_name_to_udp_server_set.pop(client_name, None)
 
-        # 清理锁
+        # Clean up lock
         self.client_name_to_lock.pop(client_name, None)
 
     def stop(self):
-        """停止UDP转发客户端"""
+        """Stop the UDP forward client"""
         self.running = False
         for port, server in list(self.udp_servers.items()):
             try:

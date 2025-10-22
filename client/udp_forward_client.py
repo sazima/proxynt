@@ -89,7 +89,7 @@ class UdpForwardClient:
         # 限速处理
         if conn.speed_limiter and conn.speed_limiter.is_exceed()[0]:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug('UDP超出速度限制')
+                LoggerFactory.get_logger().debug('UDP speed limit')
             return
 
         if conn.speed_limiter:
@@ -107,12 +107,12 @@ class UdpForwardClient:
         }
 
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-            LoggerFactory.get_logger().debug(f'发送UDP数据到WebSocket，uid: {conn.uid}, 长度: {len(data)}')
+            LoggerFactory.get_logger().debug(f'send udp to WebSocket，uid: {conn.uid}, len: {len(data)}')
 
         try:
             self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
         except Exception as e:
-            LoggerFactory.get_logger().error(f"UDP数据发送到WebSocket失败: {e}")
+            LoggerFactory.get_logger().error(f"send UDP to WebSocket error: {e}")
 
     def create_udp_socket(self, name: str, uid: bytes, ip_port: str, speed_limiter: SpeedLimiter) -> bool:
         """创建UDP套接字"""
@@ -125,7 +125,7 @@ class UdpForwardClient:
 
             try:
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                    LoggerFactory.get_logger().debug(f'创建UDP套接字 {name}, {uid}')
+                    LoggerFactory.get_logger().debug(f'send UDP socket {name}, {uid}')
 
                 # 创建UDP套接字
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -134,10 +134,10 @@ class UdpForwardClient:
                 connection = UdpSocketConnection(uid, s, name, ip_port, self.ws, speed_limiter)
                 self.uid_to_connection[uid] = connection
 
-                LoggerFactory.get_logger().info(f'UDP套接字创建成功，名称: {name}, UID: {uid}')
+                LoggerFactory.get_logger().info(f'UDP socket create success，name: {name}, uid: {uid}')
                 return True
             except Exception as e:
-                LoggerFactory.get_logger().error(f"创建UDP套接字失败: {e}")
+                LoggerFactory.get_logger().error(f"udp socket create failed: {e}")
                 LoggerFactory.get_logger().error(traceback.format_exc())
                 return False
 
@@ -145,23 +145,23 @@ class UdpForwardClient:
         """通过UID发送UDP数据"""
         connection = self.uid_to_connection.get(uid)
         if not connection:
-            LoggerFactory.get_logger().warning(f"未找到UID为 {uid} 的UDP连接")
+            LoggerFactory.get_logger().warning(f"udp UID {uid} not found")
             return False
 
         try:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'开始发送UDP数据，UID: {uid}, 长度: {len(data)}')
+                LoggerFactory.get_logger().debug(f'start send UDP data，UID: {uid}, len: {len(data)}')
 
             if connection.target_address:
                 connection.socket.sendto(data, connection.target_address)
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                    LoggerFactory.get_logger().debug(f'UDP数据发送成功，目标: {connection.target_address}, 长度: {len(data)}')
+                    LoggerFactory.get_logger().debug(f'UDP send success，target: {connection.target_address}, len: {len(data)}')
                 return True
             else:
-                LoggerFactory.get_logger().warning(f"UDP连接未设置目标地址，UID: {uid}")
+                LoggerFactory.get_logger().warning(f"UDP has no target address，UID: {uid}")
                 return False
         except Exception as e:
-            LoggerFactory.get_logger().error(f"UDP数据发送失败: {e}")
+            LoggerFactory.get_logger().error(f"UDP data send failed: {e}")
             LoggerFactory.get_logger().error(traceback.format_exc())
             return False
 
@@ -172,11 +172,11 @@ class UdpForwardClient:
                 connection = self.uid_to_connection.pop(uid)
                 try:
                     connection.socket.close()
-                    LoggerFactory.get_logger().info(f'UDP连接已关闭，UID: {uid}')
+                    LoggerFactory.get_logger().info(f'UDP closed，UID: {uid}')
                 except Exception as e:
-                    LoggerFactory.get_logger().error(f"关闭UDP连接失败: {e}")
+                    LoggerFactory.get_logger().error(f" close UDP failed: {e}")
             else:
-                LoggerFactory.get_logger().warning(f"未找到UID为 {uid} 的UDP连接")
+                LoggerFactory.get_logger().warning(f"UID {uid} UDP not found")
 
     def close(self):
         """关闭所有UDP连接"""

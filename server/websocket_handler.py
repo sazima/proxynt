@@ -41,9 +41,8 @@ class MyWebSocketaHandler(WebSocketHandler):
     names: Set[str]
     recv_time: float = None
 
-    compress_support: bool = False  # 是否支持snappy压缩
+    compress_support: bool = False  # Whether snappy compression is supported
 
-    # handler_to_recv_time: Dict['MyWebSocketaHandler', float] = {}
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock: Lock
 
@@ -59,20 +58,18 @@ class MyWebSocketaHandler(WebSocketHandler):
             msg = 'python-snappy is not installed on the server'
             LoggerFactory.get_logger().info(msg)
             self.close(reason=msg)
-        LoggerFactory.get_logger().info(f'new open websocket, compress_support: {self.compress_support}')
+        LoggerFactory.get_logger().info(f'New WebSocket connection opened, compression supported: {self.compress_support}')
 
     async def write_message(self, message, binary=False):
         start_time = time.time()
         try:
             byte_message = bytes(message)
-            # if self.compress_support:
-            #     byte_message = await asyncio.get_event_loop().run_in_executor(p, snappy.snappy.compress, byte_message)
             await (super(MyWebSocketaHandler, self).write_message(byte_message, binary))
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'write message cost time {time.time() - start_time}, len: {len(message)}')
+                LoggerFactory.get_logger().debug(f'Write message cost {time.time() - start_time}s, length: {len(message)}')
             return
         except Exception:
-            LoggerFactory.get_logger().info(f'send error: {message[:10]}')
+            LoggerFactory.get_logger().info(f'Send error: {message[:10]}')
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise
 
@@ -80,15 +77,11 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self.on_message_async(m_bytes))
 
     async def on_message_async(self, message):
-        # old_len = len(message)
-        # message = await asyncio.get_event_loop().run_in_executor(p, snappy.snappy.uncompress, message)
-        # if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-        #     LoggerFactory.get_logger().info(f'压缩了: {len(message) - old_len }::: {len(message)}, {old_len}')
         tcp_forward_client = TcpForwardClient.get_instance()
         try:
             message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support)
         except json.decoder.JSONDecodeError:
-            self.close(reason='invalid password')
+            self.close(reason='Invalid password')
             raise InvalidPassword()
         except SignatureError:
             self.close(reason='SignatureError')
@@ -99,15 +92,15 @@ class MyWebSocketaHandler(WebSocketHandler):
         try:
             start_time = time.time()
             if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
-                data: TcpOverWebsocketMessage = message_dict['data']  # socket消息
+                data: TcpOverWebsocketMessage = message_dict['data']  # TCP message
                 uid = data['uid']
                 await tcp_forward_client.send_to_socket(uid, data['data'])
             elif message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_UDP:
-                data: TcpOverWebsocketMessage = message_dict['data']  # UDP消息
+                data: TcpOverWebsocketMessage = message_dict['data']  # UDP message
                 uid = data['uid']
                 port = 0
 
-                # 查找对应的端口号
+                # Find corresponding UDP port
                 for p, srv in list(UdpForwardClient.get_instance().udp_servers.items()):
                     for endpoint_uid, endpoint in srv.uid_to_endpoint.items():
                         if endpoint_uid == uid:
@@ -119,29 +112,28 @@ class MyWebSocketaHandler(WebSocketHandler):
                 if port != 0:
                     await UdpForwardClient.get_instance().send_udp(uid, data['data'], port)
                 else:
-                    LoggerFactory.get_logger().warning(f"未找到UID {uid} 对应的UDP端口")
+                    LoggerFactory.get_logger().warning(f"Could not find UDP port for UID {uid}")
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
-                    LoggerFactory.get_logger().info(f'get push config: {message_dict}')
+                    LoggerFactory.get_logger().info(f'Received push config: {message_dict}')
                     push_config: PushConfigEntity = message_dict['data']
                     client_name = push_config['client_name']
                     self.version = push_config.get('version')
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
                     if client_name in self.client_name_to_handler:
-                        self.close(None, 'DuplicatedClientName')  # 与服务器上配置的名字重复
+                        self.close(None, 'DuplicatedClientName')  # Duplicated client name on server
                         raise DuplicatedName()
-                        pass
-                    data: List[ClientData] = push_config['config_list']  # 配置
+                    data: List[ClientData] = push_config['config_list']
                     name_in_client = {x['name'] for x in data}
                     if client_name in client_name_to_config_in_server:
                         for config_in_server in client_name_to_config_in_server[client_name]:
                             if config_in_server['name'] in name_in_client:
-                                self.close(None, 'DuplicatedNameWithServerConfig')  # 与服务器上配置的名字重复
+                                self.close(None, 'DuplicatedNameWithServerConfig')  # Name conflicts with server config
                                 raise DuplicatedName()
                         data.extend(client_name_to_config_in_server[client_name])
                     key = push_config['key']
                     if key != ContextUtils.get_password():
-                        self.close(reason='invalid password')
+                        self.close(reason='Invalid password')
                         raise InvalidPassword()
 
                     name_set = set()
@@ -162,36 +154,31 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 listen_socket = tcp_forward_client.create_listen_socket(d['remote_port'])
                             except OSError:
                                 self.close(None, 'Address already in use')
-                                # tcp_forward_client.close_by_client_name(self.client_name)
                                 raise
                             ip_port = d['local_ip'] + ':' + str(d['local_port'])
                             d.setdefault('speed_limit', 0)
-                            speed_limit: float = d.get('speed_limit', 0)  # 网速限制
+                            speed_limit: float = d.get('speed_limit', 0)
                             await tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self, speed_limit)
                             listen_socket_list.append(listen_socket)
                         else:
-                            # UDP处理逻辑
+                            # UDP processing
                             ip_port = d['local_ip'] + ':' + str(d['local_port'])
                             d.setdefault('speed_limit', 0)
-                            speed_limit: float = d.get('speed_limit', 0)  # 网速限制
-                            # 注册UDP服务器
+                            speed_limit: float = d.get('speed_limit', 0)
                             success = await UdpForwardClient.get_instance().register_udp_server(
                                 d['remote_port'], d['name'], ip_port, self, speed_limit)
                             if not success:
-                                self.close(None, 'UDP端口 {} 已被使用或注册失败'.format(d['remote_port']))
-                                raise Exception(f"UDP端口 {d['remote_port']} 已被使用或注册失败")
-                            LoggerFactory.get_logger().info(f"UDP服务已注册: {d['name']} 在端口 {d['remote_port']}")
-                    # self.handler_to_recv_time[self] = time.time()
+                                self.close(None, f'UDP port {d["remote_port"]} already in use or registration failed')
+                                raise Exception(f"UDP port {d['remote_port']} already in use or registration failed")
+                            LoggerFactory.get_logger().info(f"UDP service registered: {d['name']} on port {d['remote_port']}")
                     self.recv_time = time.time()
                     self.client_name_to_handler[client_name] = self
                     self.push_config = push_config
-                await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support), binary=True)  # 更新完配置再发给客户端
+                await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support), binary=True)
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.recv_time = time.time()
-                # if self.client_name:  # 只有带 client_name 的心跳时间才有用
-                #     self.handler_to_recv_time[self] = time.time()
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'on message cost time {time.time() - start_time}')
+                LoggerFactory.get_logger().debug(f'on_message processing took {time.time() - start_time}s')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
@@ -199,17 +186,15 @@ class MyWebSocketaHandler(WebSocketHandler):
         asyncio.ensure_future(self._on_close(code, reason))
 
     async def _on_close(self, code: int = None, reason: str = None) -> None:
-        LoggerFactory.get_logger().info(f'close {self.client_name}, code: {code}, reason, {reason}')
+        LoggerFactory.get_logger().info(f'Closing connection {self.client_name}, code: {code}, reason: {reason}')
         try:
             async with self.lock:
                 if self.client_name:
                     if self.client_name in self.client_name_to_handler:
                         self.client_name_to_handler.pop(self.client_name)
-                    # 关闭TCP连接
                     await TcpForwardClient.get_instance().close_by_client_name(self.client_name)
-                    # 关闭UDP连接
                     await UdpForwardClient.get_instance().close_by_client_name(self.client_name)
-            LoggerFactory.get_logger().info(f'close {self.client_name}, success')
+            LoggerFactory.get_logger().info(f'Closed {self.client_name} successfully')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise
