@@ -210,9 +210,11 @@ class TcpForwardClient:
         """
         rule_name = rule['name']
         target_client = rule['target_client']
-        target_service = rule['target_service']
         protocol = rule['protocol']
         speed_limit = rule.get('speed_limit', 0.0)
+
+        # Check if using direct mode (target_ip + target_port) or service mode (target_service)
+        use_direct_mode = 'target_ip' in rule and 'target_port' in rule
 
         LoggerFactory.get_logger().info(f'C2C TCP accept thread started: {rule_name}')
 
@@ -237,15 +239,23 @@ class TcpForwardClient:
                     self.socket_to_socket_connection[client_socket] = connection
 
                 # Send CLIENT_TO_CLIENT_FORWARD message to server
+                forward_data = {
+                    'uid': uid,
+                    'target_client': target_client,
+                    'source_rule_name': rule_name,
+                    'protocol': protocol
+                }
+
+                # Add target_ip and target_port for direct mode, or target_service for service mode
+                if use_direct_mode:
+                    forward_data['target_ip'] = rule['target_ip']
+                    forward_data['target_port'] = rule['target_port']
+                else:
+                    forward_data['target_service'] = rule['target_service']
+
                 forward_message: MessageEntity = {
                     'type_': MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD,
-                    'data': {
-                        'uid': uid,
-                        'target_client': target_client,
-                        'target_service': target_service,
-                        'source_rule_name': rule_name,
-                        'protocol': protocol
-                    }
+                    'data': forward_data
                 }
                 self.ws.send(
                     NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support),

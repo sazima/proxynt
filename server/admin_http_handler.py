@@ -375,13 +375,15 @@ class AdminC2CRuleHandler(RequestHandler):
                 return
 
             request_data = json.loads(self.request.body)
-            LoggerFactory.get_logger().info(f'C2C 规则操作: {request_data}')
+            LoggerFactory.get_logger().info(f'C2C rule operation: {request_data}')
 
-            # 提取参数
+            # Extract parameters
             rule_name = request_data.get('name')
             source_client = request_data.get('source_client')
             target_client = request_data.get('target_client')
             target_service = request_data.get('target_service')
+            target_ip = request_data.get('target_ip')
+            target_port = request_data.get('target_port')
             local_port = int(request_data.get('local_port', 0))
             local_ip = request_data.get('local_ip', '127.0.0.1')
             protocol = request_data.get('protocol', 'tcp')
@@ -389,27 +391,47 @@ class AdminC2CRuleHandler(RequestHandler):
             enabled = request_data.get('enabled', True)
             is_edit = request_data.get('is_edit', False)
 
-            # 验证参数
+            # Check if using direct mode (target_ip + target_port) or service mode (target_service)
+            use_direct_mode = bool(target_ip and target_port)
+
+            # Validate parameters
             if not rule_name:
-                self.write({'code': 400, 'data': '', 'msg': '规则名称不能为空'})
+                self.write({'code': 400, 'data': '', 'msg': 'Rule name cannot be empty'})
                 return
             if not source_client or not target_client:
-                self.write({'code': 400, 'data': '', 'msg': '源客户端和目标客户端不能为空'})
+                self.write({'code': 400, 'data': '', 'msg': 'Source and target clients cannot be empty'})
                 return
             if source_client == target_client:
-                self.write({'code': 400, 'data': '', 'msg': '源客户端和目标客户端不能相同'})
+                self.write({'code': 400, 'data': '', 'msg': 'Source and target clients cannot be the same'})
                 return
-            if not target_service:
-                self.write({'code': 400, 'data': '', 'msg': '目标服务不能为空'})
-                return
+
+            # Validate based on mode
+            if use_direct_mode:
+                # Direct mode: validate target_ip and target_port
+                if not target_ip:
+                    self.write({'code': 400, 'data': '', 'msg': 'Target IP cannot be empty in direct mode'})
+                    return
+                try:
+                    target_port = int(target_port)
+                    if target_port <= 0 or target_port > 65535:
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    self.write({'code': 400, 'data': '', 'msg': 'Target port is invalid'})
+                    return
+            else:
+                # Service mode: validate target_service
+                if not target_service:
+                    self.write({'code': 400, 'data': '', 'msg': 'Target service cannot be empty in service mode'})
+                    return
+
             if protocol not in ['tcp', 'udp']:
-                self.write({'code': 400, 'data': '', 'msg': '协议类型不合法，只支持 tcp 和 udp'})
+                self.write({'code': 400, 'data': '', 'msg': 'Invalid protocol, only tcp and udp are supported'})
                 return
             if not local_port or local_port <= 0 or local_port > 65535:
-                self.write({'code': 400, 'data': '', 'msg': '本地端口不合法'})
+                self.write({'code': 400, 'data': '', 'msg': 'Local port is invalid'})
                 return
             if speed_limit < 0:
-                self.write({'code': 400, 'data': '', 'msg': '限速必须大于等于0'})
+                self.write({'code': 400, 'data': '', 'msg': 'Speed limit must be >= 0'})
                 return
 
             # 读取当前配置
@@ -418,17 +440,24 @@ class AdminC2CRuleHandler(RequestHandler):
 
             c2c_rules = server_config.get('client_to_client_rules', [])
 
+            # Build new rule based on mode
             new_rule = {
                 'name': rule_name,
                 'source_client': source_client,
                 'target_client': target_client,
-                'target_service': target_service,
                 'local_port': local_port,
                 'local_ip': local_ip,
                 'protocol': protocol,
                 'speed_limit': speed_limit,
                 'enabled': enabled
             }
+
+            # Add mode-specific fields
+            if use_direct_mode:
+                new_rule['target_ip'] = target_ip
+                new_rule['target_port'] = target_port
+            else:
+                new_rule['target_service'] = target_service
 
             if is_edit:
                 # 编辑模式：更新现有规则

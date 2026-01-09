@@ -9,11 +9,13 @@ class _ClientEntity(TypedDict):
     local_ip: str
 
 
-class _ClientToClientRule(TypedDict):
+class _ClientToClientRule(TypedDict, total=False):
     name: str
     source_client: str
     target_client: str
-    target_service: str
+    target_service: str      # Target service name (optional, for compatibility)
+    target_ip: str           # Target IP address (optional, direct mode)
+    target_port: int         # Target port (optional, direct mode)
     local_port: int
     local_ip: str
     protocol: str

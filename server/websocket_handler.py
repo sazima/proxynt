@@ -322,52 +322,67 @@ class MyWebSocketaHandler(WebSocketHandler):
                     connection = tcp_forward_client.uid_to_connection[uid]
                     await tcp_forward_client.close_connection_async(connection)
 
-            # 客户端到客户端转发请求
+            # Client-to-client forward request
             elif message_dict['type_'] == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
                 data = message_dict['data']
                 uid = data['uid']
                 target_client = data['target_client']
-                target_service = data['target_service']
                 source_rule_name = data['source_rule_name']
                 protocol = data['protocol']
 
-                LoggerFactory.get_logger().info(f'C2C 转发请求: {self.client_name} → {target_client}/{target_service} (UID: {uid.hex()}, 协议: {protocol})')
+                # Check if using direct mode (target_ip + target_port) or service mode (target_service)
+                use_direct_mode = 'target_ip' in data and 'target_port' in data
 
-                # 1. 验证规则是否存在且已启用
+                if use_direct_mode:
+                    target_ip = data['target_ip']
+                    target_port = data['target_port']
+                    LoggerFactory.get_logger().info(f'C2C forward request (direct mode): {self.client_name} → {target_client}/{target_ip}:{target_port} (UID: {uid.hex()}, protocol: {protocol})')
+                else:
+                    target_service = data['target_service']
+                    LoggerFactory.get_logger().info(f'C2C forward request (service mode): {self.client_name} → {target_client}/{target_service} (UID: {uid.hex()}, protocol: {protocol})')
+
+                # 1. Verify rule exists and is enabled
                 c2c_rules = ContextUtils.get_c2c_rules()
                 rule = self._find_c2c_rule(source_rule_name, self.client_name, target_client, c2c_rules)
                 if not rule or not rule.get('enabled', True):
-                    LoggerFactory.get_logger().warn(f'C2C 规则不存在或已禁用: {source_rule_name}')
+                    LoggerFactory.get_logger().warn(f'C2C rule does not exist or is disabled: {source_rule_name}')
                     await self._send_connection_failed(uid, source_rule_name)
                     return
 
-                # 2. 检查目标客户端是否在线
+                # 2. Check if target client is online
                 if target_client not in self.client_name_to_handler:
-                    LoggerFactory.get_logger().warn(f'目标客户端离线: {target_client}')
+                    LoggerFactory.get_logger().warn(f'Target client offline: {target_client}')
                     await self._send_connection_failed(uid, source_rule_name)
                     return
 
                 target_handler = self.client_name_to_handler[target_client]
 
-                # 3. 查找目标服务配置
-                target_service_config = self._find_service_config(target_handler, target_service)
-                if not target_service_config:
-                    LoggerFactory.get_logger().warn(f'目标服务不存在: {target_client}/{target_service}')
-                    await self._send_connection_failed(uid, source_rule_name)
-                    return
+                # 3. Determine target IP and port
+                if use_direct_mode:
+                    # Direct mode: use target_ip and target_port from the rule
+                    ip_port = f"{target_ip}:{target_port}"
+                    service_name = source_rule_name  # Use rule name as service name
+                else:
+                    # Service mode: find target service configuration (backward compatible)
+                    target_service_config = self._find_service_config(target_handler, target_service)
+                    if not target_service_config:
+                        LoggerFactory.get_logger().warn(f'Target service does not exist: {target_client}/{target_service}')
+                        await self._send_connection_failed(uid, source_rule_name)
+                        return
+                    ip_port = f"{target_service_config['local_ip']}:{target_service_config['local_port']}"
+                    service_name = target_service
 
-                # 4. 存储路由信息
+                # 4. Store routing information
                 async with self.c2c_lock:
                     self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol)
 
-                # 5. 转发 REQUEST_TO_CONNECT 到目标客户端
-                ip_port = f"{target_service_config['local_ip']}:{target_service_config['local_port']}"
+                # 5. Forward REQUEST_TO_CONNECT to target client
                 message_type = MessageTypeConstant.REQUEST_TO_CONNECT if protocol == 'tcp' else MessageTypeConstant.REQUEST_TO_CONNECT_UDP
 
                 forward_message: MessageEntity = {
                     'type_': message_type,
                     'data': {
-                        'name': target_service,
+                        'name': service_name,
                         'uid': uid,
                         'ip_port': ip_port,
                         'data': b''
@@ -377,7 +392,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     NatSerialization.dumps(forward_message, ContextUtils.get_password(), target_handler.compress_support),
                     binary=True
                 )
-                LoggerFactory.get_logger().info(f'已转发连接请求到目标客户端 {target_client}')
+                LoggerFactory.get_logger().info(f'Connection request forwarded to target client {target_client}')
 
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'on_message processing took {time.time() - start_time}s')

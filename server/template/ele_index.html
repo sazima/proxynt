@@ -88,9 +88,16 @@
                                 width="120">
                         </el-table-column>
                         <el-table-column
-                                prop="target_service"
-                                label="目标服务"
-                                width="120">
+                                label="目标"
+                                width="180">
+                            <template slot-scope="scope">
+                                <span v-if="scope.row.target_service">
+                                    <el-tag type="info" size="mini">服务</el-tag> {[ scope.row.target_service ]}
+                                </span>
+                                <span v-else-if="scope.row.target_ip && scope.row.target_port">
+                                    <el-tag type="success" size="mini">直连</el-tag> {[ scope.row.target_ip ]}:{[ scope.row.target_port ]}
+                                </span>
+                            </template>
                         </el-table-column>
                         <el-table-column
                                 prop="local_ip"
@@ -237,7 +244,23 @@
                     </el-option>
                 </el-select>
             </el-form-item>
-            <el-form-item label="目标服务" :label-width="formLabelWidth">
+            <el-form-item label="连接模式" :label-width="formLabelWidth">
+                <el-radio-group v-model="c2cForm.connection_mode" @change="onConnectionModeChange">
+                    <el-radio label="service">
+                        服务模式
+                        <el-tooltip content="通过目标客户端的服务名连接（端口会映射到公网）" placement="top">
+                            <i class="el-icon-question" style="color: #909399;"></i>
+                        </el-tooltip>
+                    </el-radio>
+                    <el-radio label="direct">
+                        直连模式
+                        <el-tooltip content="直接指定IP和端口连接（推荐，不暴露公网端口）" placement="top">
+                            <i class="el-icon-question" style="color: #909399;"></i>
+                        </el-tooltip>
+                    </el-radio>
+                </el-radio-group>
+            </el-form-item>
+            <el-form-item v-if="c2cForm.connection_mode === 'service'" label="目标服务" :label-width="formLabelWidth">
                 <el-select v-model="c2cForm.target_service" placeholder="请选择目标服务" style="width: 100%;" :disabled="!c2cForm.target_client">
                     <el-option
                             v-for="service in getTargetClientServices(c2cForm.target_client)"
@@ -246,6 +269,12 @@
                             :value="service.name">
                     </el-option>
                 </el-select>
+            </el-form-item>
+            <el-form-item v-if="c2cForm.connection_mode === 'direct'" label="目标IP" :label-width="formLabelWidth">
+                <el-input v-model="c2cForm.target_ip" placeholder="例如: 127.0.0.1" autocomplete="off"></el-input>
+            </el-form-item>
+            <el-form-item v-if="c2cForm.connection_mode === 'direct'" label="目标端口" :label-width="formLabelWidth">
+                <el-input v-model="c2cForm.target_port" type="number" placeholder="例如: 22" autocomplete="off"></el-input>
             </el-form-item>
             <el-form-item label="本地IP" :label-width="formLabelWidth">
                 <el-input v-model="c2cForm.local_ip" autocomplete="off"></el-input>
@@ -301,7 +330,10 @@
                     name: '',
                     source_client: '',
                     target_client: '',
+                    connection_mode: 'direct',  // 默认使用直连模式
                     target_service: '',
+                    target_ip: '',
+                    target_port: '',
                     local_ip: '127.0.0.1',
                     local_port: '',
                     protocol: 'tcp',
@@ -450,7 +482,10 @@
                     name: '',
                     source_client: sourceClientName || '',
                     target_client: '',
+                    connection_mode: 'direct',  // 默认使用直连模式
                     target_service: '',
+                    target_ip: '',
+                    target_port: '',
                     local_ip: '127.0.0.1',
                     local_port: '',
                     protocol: 'tcp',
@@ -460,12 +495,18 @@
                 this.dialogC2CVisible = true
             },
             handleEditC2C(row) {
+                // 自动检测模式
+                const connectionMode = row.target_ip && row.target_port ? 'direct' : 'service'
+
                 this.c2cForm = {
                     is_edit: true,
                     name: row.name,
                     source_client: row.source_client,
                     target_client: row.target_client,
-                    target_service: row.target_service,
+                    connection_mode: connectionMode,
+                    target_service: row.target_service || '',
+                    target_ip: row.target_ip || '',
+                    target_port: row.target_port || '',
                     local_ip: row.local_ip,
                     local_port: row.local_port,
                     protocol: row.protocol,
@@ -476,7 +517,29 @@
             },
             submitC2CAddOrEdit() {
                 var url = window.location.href.split('?')[0] + '/c2c_rules'
-                axios.post(url, this.c2cForm).then(res => {
+
+                // 构建请求数据，只发送对应模式的字段
+                const requestData = {
+                    is_edit: this.c2cForm.is_edit,
+                    name: this.c2cForm.name,
+                    source_client: this.c2cForm.source_client,
+                    target_client: this.c2cForm.target_client,
+                    local_ip: this.c2cForm.local_ip,
+                    local_port: this.c2cForm.local_port,
+                    protocol: this.c2cForm.protocol,
+                    speed_limit: this.c2cForm.speed_limit,
+                    enabled: this.c2cForm.enabled
+                }
+
+                // 根据模式添加相应字段
+                if (this.c2cForm.connection_mode === 'direct') {
+                    requestData.target_ip = this.c2cForm.target_ip
+                    requestData.target_port = this.c2cForm.target_port
+                } else {
+                    requestData.target_service = this.c2cForm.target_service
+                }
+
+                axios.post(url, requestData).then(res => {
                     if (res.data.code !== 200) {
                         return alert(res.data.msg)
                     }
@@ -502,6 +565,15 @@
             onTargetClientChange() {
                 // 当目标客户端改变时，清空目标服务选择
                 this.c2cForm.target_service = ''
+            },
+            onConnectionModeChange() {
+                // 当连接模式改变时，清空相应字段
+                if (this.c2cForm.connection_mode === 'service') {
+                    this.c2cForm.target_ip = ''
+                    this.c2cForm.target_port = ''
+                } else {
+                    this.c2cForm.target_service = ''
+                }
             },
             handleDeleteC2C(name) {
                 var url = window.location.href.split('?')[0] + '/c2c_rules'

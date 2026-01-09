@@ -53,17 +53,33 @@ class NatSerialization:
             body = struct.pack(f'BBI{UID_LEN}s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_), uid, name.encode(), ip_port.encode(), bytes_)
 
         elif type_ == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
-            # C2C 转发请求: uid + target_client + target_service + source_rule_name + protocol
+            # C2C forward request: support two modes
             data_content = data['data']
             uid = data_content['uid']
             target_client = data_content['target_client'].encode()
-            target_service = data_content['target_service'].encode()
             source_rule_name = data_content['source_rule_name'].encode()
             protocol = data_content['protocol'].encode()
-            # 格式: len_target_client(1) | len_target_service(1) | len_source_rule_name(1) | len_protocol(1) | uid(4) | strings...
-            body = struct.pack(f'BBBB{UID_LEN}s{len(target_client)}s{len(target_service)}s{len(source_rule_name)}s{len(protocol)}s',
-                             len(target_client), len(target_service), len(source_rule_name), len(protocol),
-                             uid, target_client, target_service, source_rule_name, protocol)
+
+            # Check if using direct mode (target_ip + target_port) or service mode (target_service)
+            if 'target_ip' in data_content and 'target_port' in data_content:
+                # Direct mode: magic(1) | mode_flag(1) | len_target_client(1) | len_target_ip(1) | len_source_rule_name(1) | len_protocol(1) | target_port(2) | uid(4) | strings...
+                magic = 0xFF  # Magic number to identify new format
+                mode_flag = 0x01
+                target_ip = data_content['target_ip'].encode()
+                target_port = data_content['target_port']
+                body = struct.pack(f'BBBBBBH{UID_LEN}s{len(target_client)}s{len(target_ip)}s{len(source_rule_name)}s{len(protocol)}s',
+                                 magic, mode_flag, len(target_client), len(target_ip), len(source_rule_name), len(protocol),
+                                 target_port, uid, target_client, target_ip, source_rule_name, protocol)
+            else:
+                # Service mode: check if new format or old format for backward compatibility
+                target_service = data_content['target_service'].encode()
+
+                # Always use new format when sending (with magic number for identification)
+                magic = 0xFF  # Magic number to identify new format
+                mode_flag = 0x00
+                body = struct.pack(f'BBBBBB{UID_LEN}s{len(target_client)}s{len(target_service)}s{len(source_rule_name)}s{len(protocol)}s',
+                                 magic, mode_flag, len(target_client), len(target_service), len(source_rule_name), len(protocol),
+                                 uid, target_client, target_service, source_rule_name, protocol)
 
         elif type_ == MessageTypeConstant.PUSH_CONFIG:
             body =  json.dumps(data).encode()
@@ -130,17 +146,53 @@ class NatSerialization:
             }
             return return_data
         elif type_.decode() == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
-            # 解析 C2C 转发请求
-            len_target_client, len_target_service, len_source_rule_name, len_protocol = struct.unpack('BBBB', body[:4])
-            uid, target_client, target_service, source_rule_name, protocol = struct.unpack(
-                f'4s{len_target_client}s{len_target_service}s{len_source_rule_name}s{len_protocol}s', body[4:])
-            data = {
-                'uid': uid,
-                'target_client': target_client.decode(),
-                'target_service': target_service.decode(),
-                'source_rule_name': source_rule_name.decode(),
-                'protocol': protocol.decode()
-            }
+            # Parse C2C forward request: support old and new formats
+            first_byte = struct.unpack('B', body[:1])[0]
+
+            if first_byte == 0xFF:
+                # New format: magic(1) | mode_flag(1) | ...
+                mode_flag = struct.unpack('B', body[1:2])[0]
+
+                if mode_flag == 0x01:
+                    # Direct mode: parse target_ip and target_port
+                    len_target_client, len_target_ip, len_source_rule_name, len_protocol = struct.unpack('BBBB', body[2:6])
+                    target_port = struct.unpack('H', body[6:8])[0]
+                    uid, target_client, target_ip, source_rule_name, protocol = struct.unpack(
+                        f'4s{len_target_client}s{len_target_ip}s{len_source_rule_name}s{len_protocol}s', body[8:])
+                    data = {
+                        'uid': uid,
+                        'target_client': target_client.decode(),
+                        'target_ip': target_ip.decode(),
+                        'target_port': target_port,
+                        'source_rule_name': source_rule_name.decode(),
+                        'protocol': protocol.decode()
+                    }
+                else:
+                    # Service mode (new format): parse target_service
+                    len_target_client, len_target_service, len_source_rule_name, len_protocol = struct.unpack('BBBB', body[2:6])
+                    uid, target_client, target_service, source_rule_name, protocol = struct.unpack(
+                        f'4s{len_target_client}s{len_target_service}s{len_source_rule_name}s{len_protocol}s', body[6:])
+                    data = {
+                        'uid': uid,
+                        'target_client': target_client.decode(),
+                        'target_service': target_service.decode(),
+                        'source_rule_name': source_rule_name.decode(),
+                        'protocol': protocol.decode()
+                    }
+            else:
+                # Old format (backward compatible): len_target_client(1) | len_target_service(1) | len_source_rule_name(1) | len_protocol(1) | uid(4) | strings...
+                len_target_client = first_byte
+                len_target_service, len_source_rule_name, len_protocol = struct.unpack('BBB', body[1:4])
+                uid, target_client, target_service, source_rule_name, protocol = struct.unpack(
+                    f'4s{len_target_client}s{len_target_service}s{len_source_rule_name}s{len_protocol}s', body[4:])
+                data = {
+                    'uid': uid,
+                    'target_client': target_client.decode(),
+                    'target_service': target_service.decode(),
+                    'source_rule_name': source_rule_name.decode(),
+                    'protocol': protocol.decode()
+                }
+
             return_data: MessageEntity = {
                 'type_': type_.decode(),
                 'data': data
