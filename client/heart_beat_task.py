@@ -55,6 +55,8 @@ class HeatBeatTask:
                 'type_': MessageTypeConstant.PING,
                 'data': None
             }
+            # 心跳消息直接发送（不通过队列），确保最低延迟
+            # 因为客户端心跳不经过 MessageSender，直接使用 ws.send
             self.ws.send(NatSerialization.dumps(ping_message, ContextUtils.get_password(), False), websocket.ABNF.OPCODE_BINARY)
             # LoggerFactory.get_logger().debug('send client heart beat success ')
         else:
@@ -62,15 +64,15 @@ class HeatBeatTask:
             # LoggerFactory.get_logger().debug('not running , skip send heart beat ')
 
     def check_recv_heart_beat_time(self):
-        """超时关闭"""
+        """Close on timeout"""
         if self.is_running:
             # LoggerFactory.get_logger().debug('time %s ', self.recv_heart_beat_time)
             if (time.time() - self.recv_heart_beat_time) > SystemConstant.MAX_HEART_BEAT_SECONDS:
-                LoggerFactory.get_logger().info(f'receive heart timeout {time.time() - self.recv_heart_beat_time}, close client  ')
-                self.ws.close()  # 有时候不会自己调用on_close 方法
+                LoggerFactory.get_logger().info(f'Heartbeat receive timeout {time.time() - self.recv_heart_beat_time}, closing client')
+                self.ws.close()  # Sometimes on_close method is not called automatically
         else:
             pass
-            LoggerFactory.get_logger().debug('not running , skip check recv heart beat ')
+            LoggerFactory.get_logger().debug('Not running, skipping heartbeat receive check')
 
     def _close_and_on_close(self):
         self.ws.close()

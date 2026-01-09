@@ -24,7 +24,7 @@ from entity.message.message_entity import MessageEntity
 
 
 class PublicSocketServer:
-    """在公网上监听的端口"""
+    """Listening port on public network"""
 
     def __init__(self, s: socket.socket, name: str, ip_port: str, websocket_handler: 'MyWebSocketaHandler', speed_limit_size: float):
         self.socket_server = s
@@ -45,13 +45,19 @@ class PublicSocketServer:
 
 
 class PublicSocketConnection:
-    """对应连接公网端口的客户端"""
+    """Client connecting to public network port"""
 
     def __init__(self, uid: bytes, s: socket.socket, socket_server: PublicSocketServer):
         self.uid: bytes = uid
         self.socket: socket.socket = s
         self.socket_server = socket_server
         self.socket_server.add_client(self)
+
+        # Optimistic send mode configuration
+        self.optimistic_mode = True  # Enable optimistic send by default
+        self.connection_confirmed = False  # Whether connection is confirmed
+        self.early_data_buffer = []  # Buffer early data (data received before connection confirmation)
+        self.max_early_data_packets = 10  # Maximum 10 buffered packets
 
     def __str__(self):
         return f'{self.uid}_{self.socket}_{self.socket_server.name}'
@@ -134,6 +140,22 @@ class TcpForwardClient:
         if each not in self.socket_to_connection:
             return
         socket_connection = self.socket_to_connection[each]
+
+        # Optimistic send mode: buffer data if connection not confirmed
+        if socket_connection.optimistic_mode and not socket_connection.connection_confirmed:
+            if len(socket_connection.early_data_buffer) < socket_connection.max_early_data_packets:
+                socket_connection.early_data_buffer.append(recv)
+                if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                    LoggerFactory.get_logger().debug(f'Buffering early data uid: {socket_connection.uid}, len: {len(recv)}, buffer_size: {len(socket_connection.early_data_buffer)}')
+            else:
+                # Too much buffered data, connection may have failed, close connection
+                LoggerFactory.get_logger().warning(f'Too much early data buffered, closing connection uid: {socket_connection.uid}')
+                try:
+                    self.close_connection(socket_connection)
+                except (OSError, ValueError, KeyError):
+                    LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
+            return
+
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to ws uid: {socket_connection.uid}, len: {len(recv)}')
         send_message: MessageEntity = {
@@ -162,11 +184,13 @@ class TcpForwardClient:
         try:
             client, address = server_socket.accept()
             client: socket.socket
+            # 启用 TCP_NODELAY 减少延迟（禁用 Nagle 算法）
+            client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         except OSError:
             return
-        LoggerFactory.get_logger().info(f'get connect : {address}')
+        LoggerFactory.get_logger().info(f'Received connection from: {address}')
         server = self.listen_socket_to_public_server[server_socket]
-        # 当前 服务端的client 也会对应服务端连接内网服务的一个 client
+        # Current server client also corresponds to a client connecting to internal network service
         uid = os.urandom(4)
         client_socket_connection = PublicSocketConnection(uid, client, server)
         self.uid_to_connection[uid] = client_socket_connection
@@ -176,7 +200,7 @@ class TcpForwardClient:
         self.socket_event_loop.register(client, append_data)
 
     def request_to_connect(self, client_socket_connection: PublicSocketConnection):
-        """请求连接客户端"""
+        """Request connection to client"""
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.REQUEST_TO_CONNECT,
             'data': {
@@ -219,33 +243,33 @@ class TcpForwardClient:
             LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
     async def close_connection_async(self, connection: PublicSocketConnection):
-        """异步关闭连接，避免在事件循环中阻塞"""
+        """Asynchronously close connection to avoid blocking in event loop"""
         try:
-            LoggerFactory.get_logger().info(f'async close {connection.uid}')
+            LoggerFactory.get_logger().info(f'Async closing connection {connection.uid}')
             uid = connection.uid
             if uid not in self.uid_to_connection:
                 return
-            # 从跟踪字典中移除
+            # Remove from tracking dictionaries
             self.uid_to_connection.pop(uid, None)
             self.socket_to_connection.pop(connection.socket, None)
             connection.socket_server.delete_client(connection)
-            # 确保在关闭前取消注册
+            # Ensure unregister before closing
             try:
                 await self.socket_event_loop.async_unregister(connection.socket)
             except Exception as e:
                 LoggerFactory.get_logger().error(f'Error unregistering socket: {e}')
 
-            # 关闭套接字
+            # Close socket
             try:
                 connection.socket.close()
             except Exception as e:
                 LoggerFactory.get_logger().error(f'Error closing socket: {e}')
         except Exception as e:
-            LoggerFactory.get_logger().error(f'close error {e}')
+            LoggerFactory.get_logger().error(f'Close error: {e}')
 
     def close_connection(self, connection: PublicSocketConnection):
         try:
-            LoggerFactory.get_logger().info(f'close {connection.uid}')
+            LoggerFactory.get_logger().info(f'Closing connection {connection.uid}')
             # with self.close_lock:
             uid = connection.uid
             if uid not in self.uid_to_connection:
@@ -256,7 +280,7 @@ class TcpForwardClient:
             connection.socket_server.delete_client(connection)
             connection.socket.close()
         except Exception:
-            LoggerFactory.get_logger().error(f'close error {traceback.format_exc()}')
+            LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
             raise
 
     @classmethod
@@ -268,7 +292,7 @@ class TcpForwardClient:
         return s
 
     def close(self):
-        """其实没有close， 程序启动的时候start"""
+        """Actually no close operation, starts when program starts"""
         # self.is_running = False
         self.socket_event_loop.stop()
         # close client

@@ -6,7 +6,7 @@ import traceback
 from asyncio import Lock
 from concurrent.futures import ThreadPoolExecutor
 from json import JSONDecodeError
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Tuple
 
 from server.udp_forward_client import UdpForwardClient
 
@@ -45,6 +45,11 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock: Lock
+
+    # 客户端到客户端转发路由状态
+    # uid → (source_handler, target_handler, rule_name, protocol)
+    c2c_uid_to_routing: Dict[bytes, Tuple['MyWebSocketaHandler', 'MyWebSocketaHandler', str, str]] = {}
+    c2c_lock: Lock = Lock()
 
     def open(self, *args: str, **kwargs: str):
         self.lock = Lock()
@@ -91,28 +96,87 @@ class MyWebSocketaHandler(WebSocketHandler):
             raise
         try:
             start_time = time.time()
+            # 智能心跳：记录业务活动（非 PING 消息）
+            if self.client_name and message_dict['type_'] != MessageTypeConstant.PING:
+                from server.task.heart_beat_task import HeartBeatTask
+                # 假设 HeartBeatTask 实例可以通过 ContextUtils 获取
+                # 这里需要在 run_server.py 中保存实例引用
+                heart_beat_task = ContextUtils.get_heart_beat_task()
+                if heart_beat_task:
+                    heart_beat_task.update_business_activity(self.client_name)
+
             if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
                 data: TcpOverWebsocketMessage = message_dict['data']  # TCP message
                 uid = data['uid']
-                await tcp_forward_client.send_to_socket(uid, data['data'])
+
+                # 检查是否为 C2C 连接
+                if uid in self.c2c_uid_to_routing:
+                    source_handler, target_handler, rule_name, protocol = self.c2c_uid_to_routing[uid]
+
+                    # 确定路由方向并转发
+                    if self == source_handler:
+                        # 数据从源客户端 (C) → 目标客户端 (A)
+                        await target_handler.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
+                                                  target_handler.compress_support),
+                            binary=True
+                        )
+                    elif self == target_handler:
+                        # 数据从目标客户端 (A) → 源客户端 (C)
+                        await source_handler.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
+                                                  source_handler.compress_support),
+                            binary=True
+                        )
+
+                    # 处理连接关闭（空数据）
+                    if not data['data']:
+                        async with self.c2c_lock:
+                            self.c2c_uid_to_routing.pop(uid, None)
+                            LoggerFactory.get_logger().info(f'C2C 连接关闭 UID: {uid.hex()}')
+                else:
+                    # 现有的外部转发逻辑
+                    await tcp_forward_client.send_to_socket(uid, data['data'])
             elif message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_UDP:
                 data: TcpOverWebsocketMessage = message_dict['data']  # UDP message
                 uid = data['uid']
-                port = 0
 
-                # Find corresponding UDP port
-                for p, srv in list(UdpForwardClient.get_instance().udp_servers.items()):
-                    for endpoint_uid, endpoint in srv.uid_to_endpoint.items():
-                        if endpoint_uid == uid:
-                            port = p
-                            break
-                    if port != 0:
-                        break
+                # 检查是否为 C2C 连接
+                if uid in self.c2c_uid_to_routing:
+                    source_handler, target_handler, rule_name, protocol = self.c2c_uid_to_routing[uid]
 
-                if port != 0:
-                    await UdpForwardClient.get_instance().send_udp(uid, data['data'], port)
+                    # 确定路由方向并转发
+                    if self == source_handler:
+                        # 数据从源客户端 (C) → 目标客户端 (A)
+                        await target_handler.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
+                                                  target_handler.compress_support),
+                            binary=True
+                        )
+                    elif self == target_handler:
+                        # 数据从目标客户端 (A) → 源客户端 (C)
+                        await source_handler.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
+                                                  source_handler.compress_support),
+                            binary=True
+                        )
                 else:
-                    LoggerFactory.get_logger().warning(f"Could not find UDP port for UID {uid}")
+                    # 现有的外部 UDP 转发逻辑
+                    port = 0
+
+                    # Find corresponding UDP port
+                    for p, srv in list(UdpForwardClient.get_instance().udp_servers.items()):
+                        for endpoint_uid, endpoint in srv.uid_to_endpoint.items():
+                            if endpoint_uid == uid:
+                                port = p
+                                break
+                        if port != 0:
+                            break
+
+                    if port != 0:
+                        await UdpForwardClient.get_instance().send_udp(uid, data['data'], port)
+                    else:
+                        LoggerFactory.get_logger().warning(f"Could not find UDP port for UID {uid}")
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
                     LoggerFactory.get_logger().info(f'Received push config: {message_dict}')
@@ -174,9 +238,147 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.recv_time = time.time()
                     self.client_name_to_handler[client_name] = self
                     self.push_config = push_config
+
+                    # 推送此客户端相关的 C2C 规则（作为源客户端的规则）
+                    c2c_rules = ContextUtils.get_c2c_rules()
+                    client_c2c_rules = [
+                        {
+                            'name': rule['name'],
+                            'target_client': rule['target_client'],
+                            'target_service': rule['target_service'],
+                            'local_port': rule['local_port'],
+                            'local_ip': rule['local_ip'],
+                            'protocol': rule['protocol'],
+                            'speed_limit': rule.get('speed_limit', 0.0)
+                        }
+                        for rule in c2c_rules
+                        if rule.get('source_client') == client_name and rule.get('enabled', True)
+                    ]
+                    message_dict['data']['client_to_client_rules'] = client_c2c_rules
+                    LoggerFactory.get_logger().info(f'send  {len(client_c2c_rules)}  C2C to  {client_name}')
+
                 await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support), binary=True)
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.recv_time = time.time()
+
+            # 乐观发送模式：处理连接确认消息
+            elif message_dict['type_'] == MessageTypeConstant.CONNECT_CONFIRMED:
+                data: TcpOverWebsocketMessage = message_dict['data']
+                uid = data['uid']
+
+                # 检查是否为 C2C 连接
+                if uid in self.c2c_uid_to_routing:
+                    source_handler, target_handler, rule_name, protocol = self.c2c_uid_to_routing[uid]
+                    # 转发确认消息到源客户端 (C)
+                    if self == target_handler:  # 消息来自目标客户端 (A)
+                        await source_handler.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
+                                                  source_handler.compress_support),
+                            binary=True
+                        )
+                        LoggerFactory.get_logger().info(f'C2C 连接已确认并转发到源客户端 UID: {uid.hex()}')
+                elif uid in tcp_forward_client.uid_to_connection:
+                    # 现有的外部转发逻辑
+                    connection = tcp_forward_client.uid_to_connection[uid]
+                    connection.connection_confirmed = True
+                    LoggerFactory.get_logger().info(f'连接已确认 uid: {uid}, 发送缓存数据 {len(connection.early_data_buffer)} 个包')
+
+                    # 发送缓存的早期数据
+                    for buffered_data in connection.early_data_buffer:
+                        if buffered_data:  # 跳过空数据
+                            send_message: MessageEntity = {
+                                'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
+                                'data': {
+                                    'name': connection.socket_server.name,
+                                    'data': buffered_data,
+                                    'uid': uid,
+                                    'ip_port': connection.socket_server.ip_port
+                                }
+                            }
+                            await self.write_message(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), binary=True)
+                    connection.early_data_buffer.clear()
+
+            elif message_dict['type_'] == MessageTypeConstant.CONNECT_FAILED:
+                data: TcpOverWebsocketMessage = message_dict['data']
+                uid = data['uid']
+                LoggerFactory.get_logger().info(f'连接失败 uid: {uid}')
+
+                # 检查是否为 C2C 连接
+                if uid in self.c2c_uid_to_routing:
+                    source_handler, target_handler, rule_name, protocol = self.c2c_uid_to_routing[uid]
+                    # 转发失败消息到源客户端 (C)
+                    if self == target_handler:  # 消息来自目标客户端 (A)
+                        await source_handler.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
+                                                  source_handler.compress_support),
+                            binary=True
+                        )
+                    # 清理路由表
+                    async with self.c2c_lock:
+                        self.c2c_uid_to_routing.pop(uid, None)
+                        LoggerFactory.get_logger().info(f'C2C 连接失败并已清理 UID: {uid.hex()}')
+                elif uid in tcp_forward_client.uid_to_connection:
+                    # 现有的外部转发逻辑
+                    connection = tcp_forward_client.uid_to_connection[uid]
+                    await tcp_forward_client.close_connection_async(connection)
+
+            # 客户端到客户端转发请求
+            elif message_dict['type_'] == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
+                data = message_dict['data']
+                uid = data['uid']
+                target_client = data['target_client']
+                target_service = data['target_service']
+                source_rule_name = data['source_rule_name']
+                protocol = data['protocol']
+
+                LoggerFactory.get_logger().info(f'C2C 转发请求: {self.client_name} → {target_client}/{target_service} (UID: {uid.hex()}, 协议: {protocol})')
+
+                # 1. 验证规则是否存在且已启用
+                c2c_rules = ContextUtils.get_c2c_rules()
+                rule = self._find_c2c_rule(source_rule_name, self.client_name, target_client, c2c_rules)
+                if not rule or not rule.get('enabled', True):
+                    LoggerFactory.get_logger().warn(f'C2C 规则不存在或已禁用: {source_rule_name}')
+                    await self._send_connection_failed(uid, source_rule_name)
+                    return
+
+                # 2. 检查目标客户端是否在线
+                if target_client not in self.client_name_to_handler:
+                    LoggerFactory.get_logger().warn(f'目标客户端离线: {target_client}')
+                    await self._send_connection_failed(uid, source_rule_name)
+                    return
+
+                target_handler = self.client_name_to_handler[target_client]
+
+                # 3. 查找目标服务配置
+                target_service_config = self._find_service_config(target_handler, target_service)
+                if not target_service_config:
+                    LoggerFactory.get_logger().warn(f'目标服务不存在: {target_client}/{target_service}')
+                    await self._send_connection_failed(uid, source_rule_name)
+                    return
+
+                # 4. 存储路由信息
+                async with self.c2c_lock:
+                    self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol)
+
+                # 5. 转发 REQUEST_TO_CONNECT 到目标客户端
+                ip_port = f"{target_service_config['local_ip']}:{target_service_config['local_port']}"
+                message_type = MessageTypeConstant.REQUEST_TO_CONNECT if protocol == 'tcp' else MessageTypeConstant.REQUEST_TO_CONNECT_UDP
+
+                forward_message: MessageEntity = {
+                    'type_': message_type,
+                    'data': {
+                        'name': target_service,
+                        'uid': uid,
+                        'ip_port': ip_port,
+                        'data': b''
+                    }
+                }
+                await target_handler.write_message(
+                    NatSerialization.dumps(forward_message, ContextUtils.get_password(), target_handler.compress_support),
+                    binary=True
+                )
+                LoggerFactory.get_logger().info(f'已转发连接请求到目标客户端 {target_client}')
+
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'on_message processing took {time.time() - start_time}s')
         except Exception:
@@ -194,6 +396,38 @@ class MyWebSocketaHandler(WebSocketHandler):
                         self.client_name_to_handler.pop(self.client_name)
                     await TcpForwardClient.get_instance().close_by_client_name(self.client_name)
                     await UdpForwardClient.get_instance().close_by_client_name(self.client_name)
+
+                    # 清理 C2C 连接（此客户端作为源或目标）
+                    async with self.c2c_lock:
+                        uids_to_remove = []
+                        for uid, (source_handler, target_handler, rule_name, protocol) in list(self.c2c_uid_to_routing.items()):
+                            if source_handler == self or target_handler == self:
+                                uids_to_remove.append(uid)
+                                # 通知另一端关闭连接
+                                other_handler = target_handler if source_handler == self else source_handler
+                                close_message: MessageEntity = {
+                                    'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP if protocol == 'tcp' else MessageTypeConstant.WEBSOCKET_OVER_UDP,
+                                    'data': {
+                                        'name': rule_name,
+                                        'uid': uid,
+                                        'data': b'',
+                                        'ip_port': ''
+                                    }
+                                }
+                                try:
+                                    await other_handler.write_message(
+                                        NatSerialization.dumps(close_message, ContextUtils.get_password(),
+                                                              other_handler.compress_support),
+                                        binary=True
+                                    )
+                                except Exception as e:
+                                    LoggerFactory.get_logger().error(f'通知 C2C 对端关闭失败: {e}')
+
+                        # 清理所有相关的 UID
+                        for uid in uids_to_remove:
+                            self.c2c_uid_to_routing.pop(uid, None)
+                            LoggerFactory.get_logger().info(f'已清理 C2C 连接 UID: {uid.hex()}')
+
             LoggerFactory.get_logger().info(f'Closed {self.client_name} successfully')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
@@ -201,3 +435,39 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     def check_origin(self, origin: str) -> bool:
         return True
+
+    # === C2C 辅助方法 ===
+
+    def _find_c2c_rule(self, rule_name: str, source_client: str, target_client: str, c2c_rules: List[dict]) -> dict:
+        """查找并验证 C2C 规则"""
+        for rule in c2c_rules:
+            if (rule['name'] == rule_name and
+                rule['source_client'] == source_client and
+                rule['target_client'] == target_client):
+                return rule
+        return None
+
+    def _find_service_config(self, handler: 'MyWebSocketaHandler', service_name: str) -> dict:
+        """在客户端的 push_config 中查找服务配置"""
+        if not handler.push_config:
+            return None
+        for config in handler.push_config['config_list']:
+            if config['name'] == service_name:
+                return config
+        return None
+
+    async def _send_connection_failed(self, uid: bytes, rule_name: str):
+        """发送连接失败消息给源客户端"""
+        fail_message: MessageEntity = {
+            'type_': MessageTypeConstant.CONNECT_FAILED,
+            'data': {
+                'name': rule_name,
+                'uid': uid,
+                'data': b'',
+                'ip_port': ''
+            }
+        }
+        await self.write_message(
+            NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support),
+            binary=True
+        )

@@ -14,6 +14,14 @@ from typing import List, Set, Dict
 
 import tornado
 
+# Try to enable uvloop for performance boost (20-30%)
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    _UVLOOP_ENABLED = True
+except ImportError:
+    _UVLOOP_ENABLED = False
+
 
 try:
     import snappy
@@ -125,7 +133,7 @@ class WebsocketClient:
         self.ws.on_close = self.on_close
         self.ws.on_open = self.on_open
         self.forward_client: TcpForwardClient = tcp_forward_client
-        self.udp_forward_client: UdpForwardClient = udp_forward_client  # 新增UDP转发客户端
+        self.udp_forward_client: UdpForwardClient = udp_forward_client  # UDP forward client
         self.heart_beat_task: HeatBeatTask = heart_beat_task
         self.config_data: ClientConfigEntity = config_data
         self.compress_support: bool = config_data['server']['compress']
@@ -137,7 +145,7 @@ class WebsocketClient:
             start_time = time.time()
             time_ = message_data['type_']
 
-            # 处理TCP消息
+            # Handle TCP messages
             if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
@@ -147,7 +155,7 @@ class WebsocketClient:
                 if create_result:
                     self.forward_client.send_by_uid(uid, b)
 
-            # 处理TCP连接请求
+            # Handle TCP connection request
             elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
@@ -155,7 +163,7 @@ class WebsocketClient:
                 b = data['data']
                 self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
 
-            # 新增: 处理UDP消息
+            # Handle UDP messages
             elif message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_UDP:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
@@ -165,7 +173,7 @@ class WebsocketClient:
                 if create_result:
                     self.udp_forward_client.send_by_uid(uid, b)
 
-            # 新增: 处理UDP连接请求
+            # Handle UDP connection request
             elif message_data['type_'] == MessageTypeConstant.REQUEST_TO_CONNECT_UDP:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
@@ -173,15 +181,24 @@ class WebsocketClient:
                 b = data['data']
                 self.udp_forward_client.create_udp_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
 
-            # 处理心跳和配置推送
+            # Handle heartbeat and config push
             elif message_data['type_'] == MessageTypeConstant.PING:
                 self.heart_beat_task.set_recv_heart_beat_time(time.time())
             elif message_data['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 push_config: PushConfigEntity = message_data['data']
                 for d in push_config['config_list']:
-                    # 设置限速器
+                    # Set speed limiter
                     if d.get('speed_limit'):
                         name_to_speed_limiter[d['name']] = SpeedLimiter(d['speed_limit'])
+
+                # Handle C2C rules (if exists)
+                c2c_rules = push_config.get('client_to_client_rules', [])
+                if c2c_rules:
+                    LoggerFactory.get_logger().info(f'Received {len(c2c_rules)} C2C rules, setting up listeners')
+                    # Setup C2C TCP listeners
+                    self.forward_client.setup_c2c_tcp_listeners(c2c_rules)
+                    # Setup C2C UDP listeners
+                    self.udp_forward_client.setup_c2c_udp_listeners(c2c_rules)
 
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
@@ -193,13 +210,17 @@ class WebsocketClient:
                 LoggerFactory.get_logger().info('close before open..')
                 self.heart_beat_task.is_running = False
                 self.forward_client.close()
-                self.udp_forward_client.close()  # 关闭UDP客户端
+                self.udp_forward_client.close()  # Close UDP client
+
+                # Update websocket reference (fix C2C listener threads using old connection)
+                self.forward_client.update_websocket(ws)
+                self.udp_forward_client.update_websocket(ws)
 
                 LoggerFactory.get_logger().info('open success')
                 push_client_data: List[ClientData] = self.config_data['client']
                 client_name = self.config_data.get('client_name', socket.gethostname())
 
-                # 确保每个配置项都有protocol字段，默认为'tcp'
+                # Ensure each config item has protocol field, default to 'tcp'
                 for item in push_client_data:
                     if 'protocol' not in item:
                         item['protocol'] = 'tcp'
@@ -218,7 +239,7 @@ class WebsocketClient:
 
                 ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
                 self.forward_client.set_running(True)
-                self.udp_forward_client.set_running(True)  # 启动UDP客户端
+                self.udp_forward_client.set_running(True)  # Start UDP client
                 self.heart_beat_task.is_running = True
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
@@ -251,15 +272,29 @@ def run_client(ws: websocket.WebSocketApp):
         time.sleep(2)
 
 
-# 修改main函数，初始化UDP客户端
+# Main function, initialize UDP client
 def main():
     print('github: ', SystemConstant.GITHUB)
+    if _UVLOOP_ENABLED:
+        print('uvloop enabled')
+
+    # Check if xxhash is available
+    from common.encrypt_utils import EncryptUtils
+    if not EncryptUtils.is_xxhash_available():
+        print('Warning: xxhash not installed, please run: pip install xxhash')
+        sys.exit(1)
+
+    # Fix Python 3.10+ event loop issue
+    # Need to explicitly create event loop when using uvloop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     config_data = get_config()
     signal.signal(signal.SIGINT, signal_handler)
     websocket.setdefaulttimeout(3)
     server_config = config_data['server']
     if not server_config['password']:
-        raise Exception('密码不能为空, password is required')
+        raise Exception('Password cannot be empty, password is required')
     log_path = config_data.get('log_file')
     ContextUtils.set_log_file(log_path)
     ContextUtils.set_nonce_to_time({})
@@ -278,20 +313,20 @@ def main():
         raise Exception('snappy is not installed')
     LoggerFactory.get_logger().info(f'start open {url}')
     if compress_support:
-        if '?' in url:  # 补充 compress_support 参数
+        if '?' in url:  # Append compress_support parameter
             url += '&c=' + json.dumps(compress_support)
         else:
             url += '?c=' + json.dumps(compress_support)
     ws = websocket.WebSocketApp(url)
     forward_client = TcpForwardClient(ws, compress_support)
-    udp_forward_client = UdpForwardClient(ws, compress_support)  # 创建UDP转发客户端
+    udp_forward_client = UdpForwardClient(ws, compress_support)  # Create UDP forward client
     heart_beat_task = HeatBeatTask(ws, SystemConstant.HEART_BEAT_INTERVAL)
-    WebsocketClient(ws, forward_client, udp_forward_client, heart_beat_task, config_data)  # 传入UDP转发客户端
+    WebsocketClient(ws, forward_client, udp_forward_client, heart_beat_task, config_data)  # Pass UDP forward client
     LoggerFactory.get_logger().info('start run_forever')
-    Thread(target=run_client, args=(ws,)).start()  # 为了使用tornado的ioloop 方便设置超时
+    Thread(target=run_client, args=(ws,)).start()  # Use tornado's ioloop for convenient timeout setting
     Thread(target=heart_beat_task.run).start()
     Thread(target=forward_client.start_forward).start()
-    # UDP客户端在实例化时会自动启动接收线程，无需额外启动
+    # UDP client automatically starts receive thread on instantiation, no need to start separately
     ioloop.IOLoop.current().start()
 
 

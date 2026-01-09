@@ -1,6 +1,12 @@
 from common.crypto.table import TableCipher
 import hashlib
 
+try:
+    import xxhash
+    _XXHASH_AVAILABLE = True
+except ImportError:
+    _XXHASH_AVAILABLE = False
+
 class EncryptUtils:
 
     @classmethod
@@ -18,6 +24,22 @@ class EncryptUtils:
         # function
         result = hashlib.md5(data)
         return result.digest()
+
+    @classmethod
+    def xxhash64_hash(cls, data: bytes) -> bytes:
+        """
+        使用 xxHash64 生成 8 字节签名（比 MD5 快 10 倍）
+        需要安装: pip install xxhash
+        """
+        if not _XXHASH_AVAILABLE:
+            raise ImportError('xxhash is not installed, run: pip install xxhash')
+        result = xxhash.xxh64(data)
+        return result.digest()  # 8 字节
+
+    @classmethod
+    def is_xxhash_available(cls) -> bool:
+        """检查 xxHash 是否可用"""
+        return _XXHASH_AVAILABLE
 
 
 

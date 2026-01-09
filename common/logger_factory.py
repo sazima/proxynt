@@ -37,7 +37,6 @@ class LoggerFactory:
 
     @classmethod
     def _add_file_handler(cls, logger):
-        os.makedirs('log', exist_ok=True)
         if ContextUtils.get_log_file():
             if  cls.check_log_directory(ContextUtils.get_log_file()):
                 log_file = ContextUtils.get_log_file()
@@ -47,6 +46,7 @@ class LoggerFactory:
         else:
             log_file = cls.default_log_file
         cls.check_log_directory(log_file)
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
         handler = RotatingFileHandler(log_file,  backupCount=cls.backupCount, maxBytes=cls.MAX_BYTES)
         formatter = logging.Formatter(cls.fmt)
         handler.setFormatter(formatter)

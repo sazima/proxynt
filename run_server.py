@@ -10,6 +10,14 @@ from threading import Thread
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Try to enable uvloop for performance boost (20-30%)
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    _UVLOOP_ENABLED = True
+except ImportError:
+    _UVLOOP_ENABLED = False
+
 import tornado.ioloop
 import tornado.web
 
@@ -19,7 +27,7 @@ from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
 from entity.server_config_entity import ServerConfigEntity
-from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler, ShowVariableHandler
+from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler, ShowVariableHandler, AdminC2CRuleHandler
 from server.task.heart_beat_task import HeartBeatTask
 from server.tcp_forward_client import TcpForwardClient
 from server.websocket_handler import MyWebSocketaHandler
@@ -94,6 +102,20 @@ def signal_handler(sig, frame):
 
 def main():
     print('github: ', SystemConstant.GITHUB)
+    if _UVLOOP_ENABLED:
+        print('uvloop enabled')
+
+    # Check if xxhash is available
+    from common.encrypt_utils import EncryptUtils
+    if not EncryptUtils.is_xxhash_available():
+        print('Warning: xxhash not installed, please run: pip install xxhash')
+        print('Cannot start service')
+        sys.exit(1)
+    # Fix Python 3.10+ event loop issue
+    # Need to explicitly create event loop when using uvloop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     signal.signal(signal.SIGINT, signal_handler)
     server_config = load_config()
     ContextUtils.set_server_config(server_config)
@@ -104,13 +126,14 @@ def main():
     ContextUtils.set_port(int(server_config['port']))
     ContextUtils.set_log_file(server_config.get('log_file'))
     ContextUtils.set_client_name_to_config_in_server(server_config.get('client_config') or {})
-    admin_enable = server_config.get('admin', {}).get('enable', False)  # 是否启动管理后台
-    admin_password = server_config.get('admin', {}).get('admin_password', server_config['password'])  # 管理后台密码
+    admin_enable = server_config.get('admin', {}).get('enable', False)  # Whether to enable admin backend
+    admin_password = server_config.get('admin', {}).get('admin_password', server_config['password'])  # Admin backend password
     ContextUtils.set_admin_config(server_config.get('admin'))
     websocket_path = ContextUtils.get_websocket_path()
-    admin_html_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH  # 管理网页路径
-    admin_api_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/api'  # 管理api路径
-    show_variable_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/show_variable'  # 管理api路径
+    admin_html_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH  # Admin page path
+    admin_api_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/api'  # Admin API path
+    admin_c2c_api_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/c2c_rules'  # C2C rules management API path
+    show_variable_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/show_variable'  # Show variable API path
     status_url_path = websocket_path + ('' if websocket_path.endswith('/') else '/') + SystemConstant.ADMIN_PATH + '/static'  # static
     static_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
     template_path = os.path.join(os.path.dirname(__file__), 'server', 'template')
@@ -126,6 +149,7 @@ def main():
         handlers.extend([
             (admin_html_path, AdminHtmlHandler),
             (admin_api_path, AdminHttpApiHandler),
+            (admin_c2c_api_path, AdminC2CRuleHandler),
             (show_variable_path, ShowVariableHandler)
         ])
     app = tornado.web.Application(handlers, static_path=static_path, static_url_prefix=status_url_path, template_path=template_path)
@@ -133,6 +157,7 @@ def main():
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}, websocket_path: {websocket_path}, admin_path: {admin_html_path}')
     # create interval task
     heart_beat_task = HeartBeatTask(asyncio.get_event_loop(), SystemConstant.HEART_BEAT_INTERVAL)
+    ContextUtils.set_heart_beat_task(heart_beat_task)  # Save instance for smart heartbeat
     Thread(target=heart_beat_task.run).start()
     check_cookie_task = CheckCookieTask()
     tornado.ioloop.PeriodicCallback(check_cookie_task.run, 3600 * 1000).start()

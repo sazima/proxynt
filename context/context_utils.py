@@ -20,6 +20,7 @@ class ContextUtils:
     _nonce_to_timestamp = '_nonce_to_timestamp'
 
     _server_config = '_server_config'  # 服务端配置
+    _heart_beat_task = '_heart_beat_task'  # 心跳任务实例（用于智能心跳）
 
     @classmethod
     def get_password(cls) -> str:
@@ -108,3 +109,19 @@ class ContextUtils:
     @classmethod
     def set_server_config(cls, s: ServerConfigEntity):
         c[cls._server_config] = s
+
+    @classmethod
+    def get_heart_beat_task(cls):
+        """获取心跳任务实例（用于智能心跳）"""
+        return c.get(cls._heart_beat_task)
+
+    @classmethod
+    def set_heart_beat_task(cls, task):
+        """设置心跳任务实例（用于智能心跳）"""
+        c[cls._heart_beat_task] = task
+
+    @classmethod
+    def get_c2c_rules(cls) -> List:
+        """获取客户端到客户端转发规则"""
+        server_config = cls.get_server_config()
+        return server_config.get('client_to_client_rules', [])

@@ -27,7 +27,11 @@ setuptools.setup(
     nt_server = {package_name}.run_server:main
     """,
     packages=l,
-    install_requires=['tornado',  'typing_extensions'],
+    install_requires=['tornado',
+                      'typing_extensions',
+                      'uvloop; sys_platform != "win32"',  # Linux/macOS 默认安装高性能事件循环
+                      'xxhash>=3.0.0',
+                      ],
     extras_require={
         "snappy": ["python-snappy"],
     },

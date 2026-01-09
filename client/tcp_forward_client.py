@@ -1,11 +1,12 @@
 import logging
+import os
 import queue
 import socket
 import threading
 import time
 import traceback
 from threading import Lock
-from typing import Dict
+from typing import Dict, List
 
 from common import websocket
 from common.logger_factory import LoggerFactory
@@ -19,28 +20,68 @@ from entity.message.message_entity import MessageEntity
 
 
 class MessageSender:
+    """
+    Dual priority queue message sender
+    - High priority queue: for heartbeat and control messages (latency < 10ms)
+    - Normal queue: for business data
+    """
 
     def __init__(self, ws):
-        self.message_queue = queue.Queue()
+        # Dual priority queues
+        self.high_priority_queue = queue.Queue(maxsize=64)     # High priority: control messages
+        self.normal_queue = queue.Queue(maxsize=1024)          # Normal priority: business data
         self.ws = ws
         self.running = False
         self.sender_thread = threading.Thread(target=self.send_messages)
 
     def send_messages(self):
-        while self.running or not self.message_queue.empty():
+        """Priority send loop"""
+        while self.running or not self.normal_queue.empty() or not self.high_priority_queue.empty():
             try:
-                send_bytes = self.message_queue.get(timeout=1)  # 设置超时避免阻塞线程
+                send_bytes = None
+
+                # 1. Process high priority queue first (non-blocking)
+                try:
+                    send_bytes = self.high_priority_queue.get_nowait()
+                except queue.Empty:
+                    pass
+
+                # 2. If high priority queue is empty, get from normal queue (blocking)
+                if send_bytes is None:
+                    try:
+                        send_bytes = self.normal_queue.get(timeout=1)
+                    except queue.Empty:
+                        continue
+
+                # 3. Send message
                 self.ws.send(send_bytes, opcode=websocket.ABNF.OPCODE_BINARY)
-                self.message_queue.task_done()
-            except queue.Empty:
-                continue
+
+                # Mark task as done
+                try:
+                    self.high_priority_queue.task_done()
+                except ValueError:
+                    self.normal_queue.task_done()
+
             except Exception as e:
                 LoggerFactory.get_logger().error(f"Failed to send message: {e}")
-                self.message_queue.task_done()
 
-    def enqueue_message(self, message):
+    def enqueue_message(self, message, high_priority=False):
+        """
+        Add message to queue
+        :param message: Message content
+        :param high_priority: Whether high priority (heartbeat, control messages)
+        """
         if self.running:
-            self.message_queue.put(message)
+            if high_priority:
+                try:
+                    self.high_priority_queue.put_nowait(message)
+                except queue.Full:
+                    LoggerFactory.get_logger().warning("High priority queue full")
+            else:
+                try:
+                    self.normal_queue.put(message, timeout=5)
+                except queue.Full:
+                    LoggerFactory.get_logger().warning("Normal queue full")
         else:
             LoggerFactory.get_logger().warning("WebSocket is not running. Cannot enqueue message.")
 
@@ -49,21 +90,36 @@ class MessageSender:
         self.sender_thread.start()
 
     def stop(self):
+        """Safe stop: send high priority first, then normal queue"""
         def safe_stop():
-            while not self.message_queue.empty():
+            # 1. Send high priority queue first
+            while not self.high_priority_queue.empty():
                 try:
-                    message = self.message_queue.get_nowait()
+                    message = self.high_priority_queue.get_nowait()
                     self.ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
+                    self.high_priority_queue.task_done()
                 except queue.Empty:
                     break
-                finally:
-                    self.message_queue.task_done()
+                except Exception as e:
+                    LoggerFactory.get_logger().error(f"Failed to send high priority message during stop: {e}")
+
+            # 2. Then send normal queue
+            while not self.normal_queue.empty():
+                try:
+                    message = self.normal_queue.get_nowait()
+                    self.ws.send(message, opcode=websocket.ABNF.OPCODE_BINARY)
+                    self.normal_queue.task_done()
+                except queue.Empty:
+                    break
+                except Exception as e:
+                    LoggerFactory.get_logger().error(f"Failed to send normal message during stop: {e}")
+
             self.running = False
         safe_stop()
 
 
 class PrivateSocketConnection:
-    """连接内网端口的客户端"""
+    """Client connecting to internal network port"""
 
     def __init__(self, uid: bytes, s: socket.socket, name: str, ws):
         self.uid: bytes = uid
@@ -82,11 +138,132 @@ class TcpForwardClient:
         self.lock = Lock()
         self.socket_event_loop = SelectPool()
 
+        # C2C client-to-client forward state
+        self.c2c_rules: List[dict] = []                     # C2C rules list
+        self.c2c_listeners: Dict[str, socket.socket] = {}   # rule_name → listener socket
+        self.c2c_uid_to_rule: Dict[bytes, str] = {}         # UID → rule_name
+
     def set_running(self, running: bool):
         self.socket_event_loop.is_running = running
 
+    def update_websocket(self, ws):
+        """Update websocket connection reference (for client reconnection)"""
+        self.ws = ws
+        LoggerFactory.get_logger().info('TCP forward client websocket reference updated')
+
     def start_forward(self):
         self.socket_event_loop.run()
+
+    def setup_c2c_tcp_listeners(self, c2c_rules: List[dict]):
+        """
+        Setup C2C TCP listeners
+        Create local listeners for each C2C rule to accept connections from local applications
+        """
+        # Clean old listeners first to avoid port conflicts
+        for rule_name, listener in list(self.c2c_listeners.items()):
+            try:
+                listener.close()
+                LoggerFactory.get_logger().info(f'Cleaned old C2C TCP listener: {rule_name}')
+            except Exception as e:
+                LoggerFactory.get_logger().error(f'Failed to close old C2C TCP listener {rule_name}: {e}')
+
+        self.c2c_listeners.clear()
+        self.c2c_uid_to_rule.clear()
+
+        self.c2c_rules = c2c_rules
+        LoggerFactory.get_logger().info(f'Setting up {len(c2c_rules)} C2C TCP listeners')
+
+        for rule in c2c_rules:
+            if rule['protocol'] != 'tcp':
+                continue
+
+            rule_name = rule['name']
+            local_ip = rule['local_ip']
+            local_port = rule['local_port']
+
+            try:
+                # Create listener socket
+                listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind((local_ip, local_port))
+                listener.listen(128)
+
+                self.c2c_listeners[rule_name] = listener
+                LoggerFactory.get_logger().info(f'C2C TCP listener created: {rule_name} on {local_ip}:{local_port}')
+
+                # Start separate thread to handle connection acceptance
+                accept_thread = threading.Thread(
+                    target=self.handle_c2c_tcp_accept,
+                    args=(listener, rule),
+                    daemon=True
+                )
+                accept_thread.start()
+
+            except Exception as e:
+                LoggerFactory.get_logger().error(f'Failed to create C2C TCP listener {rule_name}: {e}')
+                LoggerFactory.get_logger().error(traceback.format_exc())
+
+    def handle_c2c_tcp_accept(self, listener: socket.socket, rule: dict):
+        """
+        Handle C2C TCP connection acceptance
+        Loop to accept connections from local applications, send CLIENT_TO_CLIENT_FORWARD request for each connection
+        """
+        rule_name = rule['name']
+        target_client = rule['target_client']
+        target_service = rule['target_service']
+        protocol = rule['protocol']
+        speed_limit = rule.get('speed_limit', 0.0)
+
+        LoggerFactory.get_logger().info(f'C2C TCP accept thread started: {rule_name}')
+
+        while True:
+            try:
+                client_socket, client_addr = listener.accept()
+                LoggerFactory.get_logger().info(f'C2C TCP connection accepted: {rule_name} from {client_addr}')
+
+                # Enable TCP_NODELAY to reduce latency
+                client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+                # Generate unique UID
+                uid = os.urandom(4)
+
+                # Store UID → rule_name mapping
+                with self.lock:
+                    self.c2c_uid_to_rule[uid] = rule_name
+
+                    # Create connection object
+                    connection = PrivateSocketConnection(uid, client_socket, rule_name, self.ws)
+                    self.uid_to_socket_connection[uid] = connection
+                    self.socket_to_socket_connection[client_socket] = connection
+
+                # Send CLIENT_TO_CLIENT_FORWARD message to server
+                forward_message: MessageEntity = {
+                    'type_': MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD,
+                    'data': {
+                        'uid': uid,
+                        'target_client': target_client,
+                        'target_service': target_service,
+                        'source_rule_name': rule_name,
+                        'protocol': protocol
+                    }
+                }
+                self.ws.send(
+                    NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support),
+                    websocket.ABNF.OPCODE_BINARY
+                )
+                LoggerFactory.get_logger().info(f'C2C forward request sent: {rule_name} UID: {uid.hex()}')
+
+                # Register to event loop, start forwarding data
+                speed_limiter = SpeedLimiter(speed_limit) if speed_limit > 0 else None
+                self.socket_event_loop.register(client_socket, ResisterAppendData(self.handle_message, speed_limiter))
+
+            except OSError as e:
+                # Listener closed, exit loop
+                LoggerFactory.get_logger().info(f'C2C TCP listener closed: {rule_name}')
+                break
+            except Exception as e:
+                LoggerFactory.get_logger().error(f'C2C TCP accept connection error {rule_name}: {e}')
+                LoggerFactory.get_logger().error(traceback.format_exc())
 
     def handle_message(self, each: socket.socket, data: ResisterAppendData):
         connection = self.socket_to_socket_connection[each]
@@ -108,7 +285,7 @@ class TcpForwardClient:
                 'name': connection.name,
                 'data': recv,
                 'uid': connection.uid,
-                'ip_port': ''  # 这个对服务端没有用, 因此写了个空
+                'ip_port': ''  # This field is not used by the server, so it's empty
             }
         }
         start_time = time.time()
@@ -127,23 +304,57 @@ class TcpForwardClient:
             return True
         connection = None
         with self.lock:
-            if uid in self.uid_to_socket_connection:  # 再次判断
+            if uid in self.uid_to_socket_connection:  # Check again
                 return True
             try:
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(5)
+                # Enable TCP_NODELAY to reduce latency (disable Nagle algorithm)
+                s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 connection = PrivateSocketConnection(uid, s, name, self.ws)
                 self.socket_to_socket_connection[s] = connection
                 ip, port = ip_port.split(':')
                 try:
                     s.connect((ip, int(port)))
+
+                    # Optimistic send mode: send confirmation message immediately after connection success
+                    confirm_message: MessageEntity = {
+                        'type_': MessageTypeConstant.CONNECT_CONFIRMED,
+                        'data': {
+                            'name': name,
+                            'data': b'',
+                            'uid': uid,
+                            'ip_port': ip_port
+                        }
+                    }
+                    self.ws.send(NatSerialization.dumps(confirm_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+                    if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                        LoggerFactory.get_logger().debug(f'Connection confirmation message sent uid: {uid}')
+
                 except OSError as e:
                     LoggerFactory.get_logger().info(f'connection error, {e}')
+
+                    # Optimistic send mode: send failure message after connection failure
+                    fail_message: MessageEntity = {
+                        'type_': MessageTypeConstant.CONNECT_FAILED,
+                        'data': {
+                            'name': name,
+                            'data': b'',
+                            'uid': uid,
+                            'ip_port': ip_port
+                        }
+                    }
+                    try:
+                        self.ws.send(NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+                    except Exception as send_err:
+                        LoggerFactory.get_logger().error(f'Failed to send connection failure message: {send_err}')
+
                     self.close_connection(s)
                     self.close_remote_socket(connection)
                     return False
+
                 self.uid_to_socket_connection[uid] = connection
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'register socket {name}, {uid}')
@@ -158,23 +369,40 @@ class TcpForwardClient:
                 return False
 
     def close_connection(self, socket_client: socket.socket):
-        LoggerFactory.get_logger().info(f'close {socket_client}')
+        LoggerFactory.get_logger().info(f'Closing socket {socket_client}')
         if socket_client in self.socket_to_socket_connection:
             connection: PrivateSocketConnection = self.socket_to_socket_connection.pop(socket_client)
             self.socket_event_loop.unregister(socket_client)
             try:
                 socket_client.shutdown(socket.SHUT_RDWR)
             except OSError as e:
-                LoggerFactory.get_logger().warn(f'shutdown OS error {e}')
+                LoggerFactory.get_logger().warn(f'Shutdown OS error {e}')
             socket_client.close()
             connection.sender.stop()
-            LoggerFactory.get_logger().info(f'close success {socket_client}')
+            LoggerFactory.get_logger().info(f'Socket closed successfully {socket_client}')
             if connection.uid in self.uid_to_socket_connection:
                 self.uid_to_socket_connection.pop(connection.uid)
             self.close_remote_socket(connection)
 
     def close(self):
+        LoggerFactory.get_logger().info(f'Starting to close {self.c2c_listeners}')
         with self.lock:
+            # Close all C2C listeners
+            for rule_name, listener in self.c2c_listeners.items():
+                try:
+                    try:
+                        listener.shutdown(socket.SHUT_RDWR)
+                    except OSError as e:
+                        LoggerFactory.get_logger().warn(f'Shutdown OS error {e}')
+                    listener.close()
+                    LoggerFactory.get_logger().info(f'C2C TCP listener closed: {rule_name}')
+                except Exception as e:
+                    LoggerFactory.get_logger().error(f'Failed to close C2C TCP listener {rule_name}: {e}')
+
+            self.c2c_listeners.clear()
+            self.c2c_rules.clear()
+            self.c2c_uid_to_rule.clear()
+
             self.socket_event_loop.stop()
             for uid, c in self.uid_to_socket_connection.items():
                 s = c.socket
@@ -186,7 +414,7 @@ class TcpForwardClient:
                     try:
                         s.shutdown(socket.SHUT_RDWR)
                     except OSError as e:
-                        LoggerFactory.get_logger().warn(f'shutdown OS error {e}')
+                        LoggerFactory.get_logger().warn(f'Shutdown OS error {e}')
                     s.close()
                 except Exception:
                     LoggerFactory.get_logger().error(traceback.format_exc())
@@ -213,7 +441,7 @@ class TcpForwardClient:
         }
         start_time = time.time()
         self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
-        LoggerFactory.get_logger().debug(f'send to ws cost time {time.time() - start_time}')
+        LoggerFactory.get_logger().debug(f'Send to websocket cost time {time.time() - start_time}')
 
     def send_by_uid(self, uid: bytes, msg: bytes):
         connection = self.uid_to_socket_connection.get(uid)
@@ -221,14 +449,14 @@ class TcpForwardClient:
             return
         try:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'start send to  socket uid: {uid}, {len(msg)}')
+                LoggerFactory.get_logger().debug(f'Starting to send to socket uid: {uid}, length: {len(msg)}')
             s = connection.socket
             s.sendall(msg)
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'finish send to socket uid {uid}, {len(msg)}')
+                LoggerFactory.get_logger().debug(f'Finished sending to socket uid {uid}, length: {len(msg)}')
             if not msg:
                 self.close_connection(s)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
-            # 出错后, 发送空, 服务器会关闭
+            # After error, send empty message, server will close connection
             self.close_remote_socket(connection)

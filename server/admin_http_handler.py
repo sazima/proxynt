@@ -319,3 +319,246 @@ class AdminHttpApiHandler(RequestHandler):
         import socket
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(('localhost', port)) == 0
+
+
+class AdminC2CRuleHandler(RequestHandler):
+    """客户端到客户端转发规则管理 API"""
+
+    async def get(self):
+        """获取所有 C2C 规则及在线状态"""
+        try:
+            cookie_dict = ContextUtils.get_cookie_to_time()
+            result = self.get_cookie(COOKIE_KEY)
+            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
+                self.write({
+                    'code': NOT_LOGIN,
+                    'data': '',
+                    'msg': '登录信息已经过期, 请重新刷新页面'
+                })
+                return
+
+            c2c_rules = ContextUtils.get_c2c_rules()
+            online_clients = set(MyWebSocketaHandler.client_name_to_handler.keys())
+
+            # 为每个规则添加在线状态
+            enriched_rules = []
+            for rule in c2c_rules:
+                enriched_rule = rule.copy()
+                enriched_rule['source_online'] = rule['source_client'] in online_clients
+                enriched_rule['target_online'] = rule['target_client'] in online_clients
+                enriched_rules.append(enriched_rule)
+
+            self.write({
+                'code': 200,
+                'data': enriched_rules,
+                'msg': ''
+            })
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+            self.write({
+                'code': 500,
+                'data': '',
+                'msg': '服务器错误'
+            })
+
+    async def post(self):
+        """添加或编辑 C2C 规则"""
+        try:
+            cookie_dict = ContextUtils.get_cookie_to_time()
+            result = self.get_cookie(COOKIE_KEY)
+            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
+                self.write({
+                    'code': NOT_LOGIN,
+                    'data': '',
+                    'msg': '登录信息已经过期, 请重新刷新页面'
+                })
+                return
+
+            request_data = json.loads(self.request.body)
+            LoggerFactory.get_logger().info(f'C2C 规则操作: {request_data}')
+
+            # 提取参数
+            rule_name = request_data.get('name')
+            source_client = request_data.get('source_client')
+            target_client = request_data.get('target_client')
+            target_service = request_data.get('target_service')
+            local_port = int(request_data.get('local_port', 0))
+            local_ip = request_data.get('local_ip', '127.0.0.1')
+            protocol = request_data.get('protocol', 'tcp')
+            speed_limit = float(request_data.get('speed_limit', 0.0))
+            enabled = request_data.get('enabled', True)
+            is_edit = request_data.get('is_edit', False)
+
+            # 验证参数
+            if not rule_name:
+                self.write({'code': 400, 'data': '', 'msg': '规则名称不能为空'})
+                return
+            if not source_client or not target_client:
+                self.write({'code': 400, 'data': '', 'msg': '源客户端和目标客户端不能为空'})
+                return
+            if source_client == target_client:
+                self.write({'code': 400, 'data': '', 'msg': '源客户端和目标客户端不能相同'})
+                return
+            if not target_service:
+                self.write({'code': 400, 'data': '', 'msg': '目标服务不能为空'})
+                return
+            if protocol not in ['tcp', 'udp']:
+                self.write({'code': 400, 'data': '', 'msg': '协议类型不合法，只支持 tcp 和 udp'})
+                return
+            if not local_port or local_port <= 0 or local_port > 65535:
+                self.write({'code': 400, 'data': '', 'msg': '本地端口不合法'})
+                return
+            if speed_limit < 0:
+                self.write({'code': 400, 'data': '', 'msg': '限速必须大于等于0'})
+                return
+
+            # 读取当前配置
+            with open(ContextUtils.get_config_file_path(), 'r') as rf:
+                server_config: ServerConfigEntity = json.loads(rf.read())
+
+            c2c_rules = server_config.get('client_to_client_rules', [])
+
+            new_rule = {
+                'name': rule_name,
+                'source_client': source_client,
+                'target_client': target_client,
+                'target_service': target_service,
+                'local_port': local_port,
+                'local_ip': local_ip,
+                'protocol': protocol,
+                'speed_limit': speed_limit,
+                'enabled': enabled
+            }
+
+            if is_edit:
+                # 编辑模式：更新现有规则
+                found = False
+                for i, rule in enumerate(c2c_rules):
+                    if rule['name'] == rule_name:
+                        c2c_rules[i] = new_rule
+                        found = True
+                        break
+                if not found:
+                    self.write({'code': 400, 'data': '', 'msg': '要编辑的规则不存在'})
+                    return
+            else:
+                # 添加模式：检查规则名是否重复
+                for rule in c2c_rules:
+                    if rule['name'] == rule_name:
+                        self.write({'code': 400, 'data': '', 'msg': '规则名称已存在'})
+                        return
+                c2c_rules.append(new_rule)
+
+            # 检测循环依赖
+            if self._detect_circular_dependency(new_rule, c2c_rules):
+                self.write({'code': 400, 'data': '', 'msg': '检测到循环依赖，禁止添加此规则'})
+                return
+
+            # 保存到配置文件
+            server_config['client_to_client_rules'] = c2c_rules
+            with open(ContextUtils.get_config_file_path(), 'w') as wf:
+                wf.write(json.dumps(server_config, ensure_ascii=False, indent=4))
+
+            # 更新内存中的配置
+            ContextUtils.set_server_config(server_config)
+
+            # 通知相关客户端重新连接以应用新规则
+            if source_client in MyWebSocketaHandler.client_name_to_handler:
+                MyWebSocketaHandler.client_name_to_handler[source_client].close(0, 'C2C 规则已更新')
+
+            self.write({'code': 200, 'data': '', 'msg': '操作成功'})
+
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+            self.write({'code': 500, 'data': '', 'msg': '服务器错误'})
+
+    def delete(self, *args, **kwargs):
+        """删除 C2C 规则"""
+        try:
+            cookie_dict = ContextUtils.get_cookie_to_time()
+            result = self.get_cookie(COOKIE_KEY)
+            if result not in cookie_dict or time.time() - cookie_dict[result] >= SystemConstant.COOKIE_EXPIRE_SECONDS:
+                self.write({
+                    'code': NOT_LOGIN,
+                    'data': '',
+                    'msg': '登录信息已经过期, 请重新刷新页面'
+                })
+                return
+
+            rule_name = self.get_argument('name')
+            LoggerFactory.get_logger().info(f'删除 C2C 规则: {rule_name}')
+
+            if not rule_name:
+                self.write({'code': 400, 'data': '', 'msg': '规则名称不能为空'})
+                return
+
+            # 读取当前配置
+            with open(ContextUtils.get_config_file_path(), 'r') as rf:
+                server_config: ServerConfigEntity = json.loads(rf.read())
+
+            c2c_rules = server_config.get('client_to_client_rules', [])
+
+            # 查找并删除规则
+            source_client = None
+            new_rules = []
+            for rule in c2c_rules:
+                if rule['name'] == rule_name:
+                    source_client = rule['source_client']
+                else:
+                    new_rules.append(rule)
+
+            if source_client is None:
+                self.write({'code': 400, 'data': '', 'msg': '规则不存在'})
+                return
+
+            # 保存到配置文件
+            server_config['client_to_client_rules'] = new_rules
+            with open(ContextUtils.get_config_file_path(), 'w') as wf:
+                wf.write(json.dumps(server_config, ensure_ascii=False, indent=4))
+
+            # 更新内存中的配置
+            ContextUtils.set_server_config(server_config)
+
+            # 通知源客户端重新连接以应用新规则
+            if source_client in MyWebSocketaHandler.client_name_to_handler:
+                MyWebSocketaHandler.client_name_to_handler[source_client].close(0, 'C2C 规则已删除')
+
+            self.write({'code': 200, 'data': '', 'msg': '删除成功'})
+
+        except Exception:
+            LoggerFactory.get_logger().error(traceback.format_exc())
+            self.write({'code': 500, 'data': '', 'msg': '服务器错误'})
+
+    def _detect_circular_dependency(self, new_rule: dict, all_rules: list) -> bool:
+        """检测是否存在循环依赖 (DFS)"""
+        # 构建有向图: source → target
+        graph = {}
+        for rule in all_rules:
+            source = rule['source_client']
+            target = rule['target_client']
+            if source not in graph:
+                graph[source] = []
+            graph[source].append(target)
+
+        # DFS 检测环
+        def has_cycle(node, visited, rec_stack):
+            visited.add(node)
+            rec_stack.add(node)
+
+            for neighbor in graph.get(node, []):
+                if neighbor not in visited:
+                    if has_cycle(neighbor, visited, rec_stack):
+                        return True
+                elif neighbor in rec_stack:
+                    return True
+
+            rec_stack.remove(node)
+            return False
+
+        # 从新规则的源客户端开始检测
+        visited = set()
+        for node in graph:
+            if node not in visited:
+                if has_cycle(node, visited, set()):
+                    return True
+        return False

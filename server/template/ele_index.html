@@ -10,63 +10,125 @@
             style="width: 90%; margin: 0 auto">
         <el-table-column type="expand">
             <template slot-scope="props">
-                <el-table
-                        :data="props.row.config_list"
-                        stripe>
-                    <el-table-column
-                            prop="name"
-                            label="名称"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="remote_port"
-                            label="远程端口"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="local_ip"
-                            label="本地ip"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="local_port"
-                            label="本地端口"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="speed_limit"
-                            label="限速(单位MB)"
-                            width="180">
-                    </el-table-column>
-                    <el-table-column
-                            prop="protocol"
-                            label="协议"
-                            width="100">
-                        <template slot-scope="scope">
-                            <el-tag
-                                    :type="scope.row.protocol === 'udp' ? 'warning' : 'primary'"
-                                    disable-transitions>{[ scope.row.protocol || 'tcp' ]}
-                            </el-tag>
-                        </template>
-                    </el-table-column>
-                    <el-table-column label="操作" width="200">
-
-                        <template slot-scope="scope">
-                            <el-row>
-                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
+                <!-- 普通配置 -->
+                <div style="margin-bottom: 20px;">
+                    <div style="font-weight: bold; margin-bottom: 10px; color: #409EFF;">普通配置</div>
+                    <el-table
+                            :data="props.row.config_list"
+                            stripe>
+                        <el-table-column
+                                prop="name"
+                                label="名称"
+                                width="150">
+                        </el-table-column>
+                        <el-table-column
+                                prop="remote_port"
+                                label="远程端口"
+                                width="120">
+                        </el-table-column>
+                        <el-table-column
+                                prop="local_ip"
+                                label="本地IP"
+                                width="120">
+                        </el-table-column>
+                        <el-table-column
+                                prop="local_port"
+                                label="本地端口"
+                                width="120">
+                        </el-table-column>
+                        <el-table-column
+                                prop="speed_limit"
+                                label="限速(MB)"
+                                width="100">
+                        </el-table-column>
+                        <el-table-column
+                                prop="protocol"
+                                label="协议"
+                                width="80">
+                            <template slot-scope="scope">
+                                <el-tag
+                                        :type="scope.row.protocol === 'udp' ? 'warning' : 'primary'"
+                                        disable-transitions>{[ scope.row.protocol || 'tcp' ]}
+                                </el-tag>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="操作" width="150">
+                            <template slot-scope="scope">
+                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1"
                                            size="mini"
                                            @click="handleDelete(props.row.client_name, scope.row.name)">删除
                                 </el-button>
-                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1 "
+                                <el-button :disabled="props.row.can_delete_names.indexOf(scope.row.name) === -1"
                                            size="mini"
                                            @click="handleEdit(scope.row, props.row.client_name)">编辑
                                 </el-button>
-                            </el-row>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                </div>
 
-
-                        </template>
-                    </el-table-column>
-                </el-table>
+                <!-- C2C 规则 -->
+                <div style="margin-top: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div style="font-weight: bold; color: #67C23A;">C2C 转发规则 (作为源客户端)</div>
+                        <el-button type="primary" size="mini" @click="handleAddC2C(props.row.client_name)">添加 C2C 规则</el-button>
+                    </div>
+                    <el-table
+                            v-if="getC2CRulesByClient(props.row.client_name).length > 0"
+                            :data="getC2CRulesByClient(props.row.client_name)"
+                            stripe>
+                        <el-table-column
+                                prop="name"
+                                label="规则名称"
+                                width="150">
+                        </el-table-column>
+                        <el-table-column
+                                prop="target_client"
+                                label="目标客户端"
+                                width="120">
+                        </el-table-column>
+                        <el-table-column
+                                prop="target_service"
+                                label="目标服务"
+                                width="120">
+                        </el-table-column>
+                        <el-table-column
+                                prop="local_ip"
+                                label="本地IP"
+                                width="120">
+                        </el-table-column>
+                        <el-table-column
+                                prop="local_port"
+                                label="本地端口"
+                                width="100">
+                        </el-table-column>
+                        <el-table-column
+                                prop="protocol"
+                                label="协议"
+                                width="80">
+                            <template slot-scope="scope">
+                                <el-tag :type="scope.row.protocol === 'udp' ? 'warning' : 'success'" disable-transitions>
+                                    {[ scope.row.protocol ]}
+                                </el-tag>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="状态" width="100">
+                            <template slot-scope="scope">
+                                <el-tag v-if="scope.row.target_online" type="success" size="mini">目标在线</el-tag>
+                                <el-tag v-else type="info" size="mini">目标离线</el-tag>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="操作" width="150">
+                            <template slot-scope="scope">
+                                <el-button size="mini" @click="handleEditC2C(scope.row)">编辑</el-button>
+                                <el-button size="mini" type="danger" @click="handleDeleteC2C(scope.row.name)">删除</el-button>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+                    <div v-else style="color: #909399; padding: 20px; text-align: center;">
+                        暂无 C2C 转发规则，点击上方按钮添加
+                    </div>
+                </div>
             </template>
         </el-table-column>
         <el-table-column
@@ -91,16 +153,22 @@
                 </el-tag>
             </template>
         </el-table-column>
-        <el-table-column label="操作">
+        <el-table-column label="操作" width="200">
             <template slot-scope="scope">
                 <el-button
                         size="mini"
-                        @click="handleAdd(scope.row)">新增配置
+                        @click="handleAdd(scope.row)">转发配置
+                </el-button>
+                <el-button
+                        size="mini"
+                        type="success"
+                        @click="handleAddC2C(scope.row.client_name)">C2C 规则
                 </el-button>
             </template>
         </el-table-column>
     </el-table>
 
+    <!-- 客户端配置对话框 -->
     <el-dialog title="确定后客户端将重新连接" :visible.sync="dialogFormVisible">
         <el-form :model="form">
             <el-form-item label="名称" :label-width="formLabelWidth" >
@@ -142,6 +210,69 @@
             <el-button type="primary" @click="submitAddOrEdit">确 定</el-button>
         </div>
     </el-dialog>
+
+    <!-- C2C 规则对话框 -->
+    <el-dialog title="C2C 规则配置" :visible.sync="dialogC2CVisible">
+        <el-form :model="c2cForm">
+            <el-form-item label="规则名称" :label-width="formLabelWidth">
+                <el-input v-model="c2cForm.name" autocomplete="off" :disabled="c2cForm.is_edit"></el-input>
+            </el-form-item>
+            <el-form-item label="源客户端" :label-width="formLabelWidth">
+                <el-select v-model="c2cForm.source_client" placeholder="请选择源客户端" :disabled="c2cForm.is_edit" style="width: 100%;">
+                    <el-option
+                            v-for="client in tableData"
+                            :key="client.client_name"
+                            :label="client.client_name"
+                            :value="client.client_name">
+                    </el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item label="目标客户端" :label-width="formLabelWidth">
+                <el-select v-model="c2cForm.target_client" placeholder="请选择目标客户端" @change="onTargetClientChange" style="width: 100%;">
+                    <el-option
+                            v-for="client in tableData.filter(c => c.client_name !== c2cForm.source_client)"
+                            :key="client.client_name"
+                            :label="client.client_name"
+                            :value="client.client_name">
+                    </el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item label="目标服务" :label-width="formLabelWidth">
+                <el-select v-model="c2cForm.target_service" placeholder="请选择目标服务" style="width: 100%;" :disabled="!c2cForm.target_client">
+                    <el-option
+                            v-for="service in getTargetClientServices(c2cForm.target_client)"
+                            :key="service.name"
+                            :label="service.name + (service.remote_port ? ' (:' + service.remote_port + ')' : '')"
+                            :value="service.name">
+                    </el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item label="本地IP" :label-width="formLabelWidth">
+                <el-input v-model="c2cForm.local_ip" autocomplete="off"></el-input>
+            </el-form-item>
+            <el-form-item label="本地端口" :label-width="formLabelWidth">
+                <el-input v-model="c2cForm.local_port" type="number" autocomplete="off"></el-input>
+            </el-form-item>
+            <el-form-item label="协议" :label-width="formLabelWidth">
+                <el-select v-model="c2cForm.protocol" placeholder="请选择">
+                    <el-option label="TCP" value="tcp"></el-option>
+                    <el-option label="UDP" value="udp"></el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item label="限速(MB)" :label-width="formLabelWidth">
+                <el-tooltip class="item" effect="dark" content="限速, 0表示不限制" placement="bottom">
+                    <el-input v-model="c2cForm.speed_limit" type="number" autocomplete="off"></el-input>
+                </el-tooltip>
+            </el-form-item>
+            <el-form-item label="启用" :label-width="formLabelWidth">
+                <el-switch v-model="c2cForm.enabled"></el-switch>
+            </el-form-item>
+        </el-form>
+        <div slot="footer" class="dialog-footer">
+            <el-button @click="dialogC2CVisible = false">取 消</el-button>
+            <el-button type="primary" @click="submitC2CAddOrEdit">确 定</el-button>
+        </div>
+    </el-dialog>
 </div>
 <script>
     new Vue({
@@ -161,13 +292,31 @@
                     remote_port: '',
                     speed_limit: 0
                 },
-                intervalTask: ''
-
+                intervalTask: '',
+                // C2C 相关数据
+                c2cTableData: [],
+                dialogC2CVisible: false,
+                c2cForm: {
+                    is_edit: false,
+                    name: '',
+                    source_client: '',
+                    target_client: '',
+                    target_service: '',
+                    local_ip: '127.0.0.1',
+                    local_port: '',
+                    protocol: 'tcp',
+                    speed_limit: 0,
+                    enabled: true
+                }
             }
         },
         mounted() {
             this.getClientList(true)
-            this.intervalTask = setInterval(this.getClientList, 6000)
+            this.getC2CRules()
+            this.intervalTask = setInterval(() => {
+                this.getClientList()
+                this.getC2CRules()
+            }, 6000)
         },
         beforeDestroy() {
             this.intervalTask.stop()
@@ -275,6 +424,105 @@
                     console.log(err)
                     this.$message.error(err)
                     // alert('服务器出现错误')
+                })
+            },
+            // C2C 规则管理方法
+            getC2CRules() {
+                var url = window.location.href.split('?')[0] + '/c2c_rules'
+                axios.get(url, {
+                    headers: {token: localStorage.getItem('token')}
+                }).then(res => {
+                    if (res.data.code === 200) {
+                        this.c2cTableData = res.data.data
+                    } else if (res.data.code === 401) {
+                        this.$message.error(res.data.msg)
+                        setTimeout(() => {
+                            location.reload();
+                        }, 2000)
+                    }
+                }).catch(err => {
+                    console.log(err)
+                })
+            },
+            handleAddC2C(sourceClientName) {
+                this.c2cForm = {
+                    is_edit: false,
+                    name: '',
+                    source_client: sourceClientName || '',
+                    target_client: '',
+                    target_service: '',
+                    local_ip: '127.0.0.1',
+                    local_port: '',
+                    protocol: 'tcp',
+                    speed_limit: 0,
+                    enabled: true
+                }
+                this.dialogC2CVisible = true
+            },
+            handleEditC2C(row) {
+                this.c2cForm = {
+                    is_edit: true,
+                    name: row.name,
+                    source_client: row.source_client,
+                    target_client: row.target_client,
+                    target_service: row.target_service,
+                    local_ip: row.local_ip,
+                    local_port: row.local_port,
+                    protocol: row.protocol,
+                    speed_limit: row.speed_limit,
+                    enabled: row.enabled
+                }
+                this.dialogC2CVisible = true
+            },
+            submitC2CAddOrEdit() {
+                var url = window.location.href.split('?')[0] + '/c2c_rules'
+                axios.post(url, this.c2cForm).then(res => {
+                    if (res.data.code !== 200) {
+                        return alert(res.data.msg)
+                    }
+                    this.$message.success('操作成功')
+                    this.dialogC2CVisible = false
+                    this.getC2CRules()
+                    this.getClientList()  // 刷新客户端列表
+                }).catch(err => {
+                    console.log(err)
+                    this.$message.error('服务器错误')
+                })
+            },
+            getC2CRulesByClient(clientName) {
+                return this.c2cTableData.filter(rule => rule.source_client === clientName)
+            },
+            getTargetClientServices(targetClientName) {
+                if (!targetClientName) {
+                    return []
+                }
+                const targetClient = this.tableData.find(c => c.client_name === targetClientName)
+                return targetClient ? (targetClient.config_list || []) : []
+            },
+            onTargetClientChange() {
+                // 当目标客户端改变时，清空目标服务选择
+                this.c2cForm.target_service = ''
+            },
+            handleDeleteC2C(name) {
+                var url = window.location.href.split('?')[0] + '/c2c_rules'
+                this.$confirm('确定删除该 C2C 规则？源客户端将重新连接', '提示', {
+                    confirmButtonText: '确定',
+                    cancelButtonText: '取消',
+                    type: 'warning'
+                }).then(() => {
+                    axios.delete(url, {
+                        params: {name: name}
+                    }).then(res => {
+                        if (res.data.code !== 200) {
+                            return alert(res.data.msg)
+                        }
+                        this.$message.success('删除成功')
+                        this.getC2CRules()
+                        this.getClientList()  // 刷新客户端列表
+                    }).catch(err => {
+                        console.log(err)
+                        alert('服务器出现错误')
+                    })
                 })
             }
         }

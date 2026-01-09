@@ -19,19 +19,20 @@ from exceptions.replay_error import ReplayError
 from exceptions.signature_error import SignatureError
 
 UID_LEN = 4
-HEADER_LEN = 38
-EMPTY = bytes([0 for x in range(8)])
+HEADER_LEN = 22  # xxHash64 模式: 22 字节（比 MD5 模式节省 42%）
 
 
 class NatSerialization:
     """
         header + body
 
-        header (38 字节):
-        类型(1字节) | body长度(4字节) | 随机字符串(5字节) | 时间戳(4字节) | 签名 (16 字节) | 空白(8字节)
+        header (22 字节) - 使用 xxHash64 签名:
+        类型(1字节) | body长度(4字节) | 随机字符串(5字节) | 时间戳(4字节) | 签名 (8 字节)
+
         body (长度不固定):
         实际数据
 
+        注：使用 xxHash64 替代 MD5，签名速度提升 10 倍，头部大小减少 42%
     """
 
     # 报文形式: 类型, 数据
@@ -39,7 +40,8 @@ class NatSerialization:
     def dumps(cls, data: MessageEntity, key: str, compress: bool) -> bytes:
         type_ = data['type_']
         if type_ in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT,
-                     MessageTypeConstant.WEBSOCKET_OVER_UDP, MessageTypeConstant.REQUEST_TO_CONNECT_UDP):  # 添加UDP消息类型
+                     MessageTypeConstant.WEBSOCKET_OVER_UDP, MessageTypeConstant.REQUEST_TO_CONNECT_UDP,
+                     MessageTypeConstant.CONNECT_CONFIRMED, MessageTypeConstant.CONNECT_FAILED):  # 添加所有消息类型
             data_content: TcpOverWebsocketMessage = data['data']
             uid = data_content['uid']  # 长度r
             name = data_content['name']
@@ -50,6 +52,19 @@ class NatSerialization:
             ip_port = data_content['ip_port']
             body = struct.pack(f'BBI{UID_LEN}s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_), uid, name.encode(), ip_port.encode(), bytes_)
 
+        elif type_ == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
+            # C2C 转发请求: uid + target_client + target_service + source_rule_name + protocol
+            data_content = data['data']
+            uid = data_content['uid']
+            target_client = data_content['target_client'].encode()
+            target_service = data_content['target_service'].encode()
+            source_rule_name = data_content['source_rule_name'].encode()
+            protocol = data_content['protocol'].encode()
+            # 格式: len_target_client(1) | len_target_service(1) | len_source_rule_name(1) | len_protocol(1) | uid(4) | strings...
+            body = struct.pack(f'BBBB{UID_LEN}s{len(target_client)}s{len(target_service)}s{len(source_rule_name)}s{len(protocol)}s',
+                             len(target_client), len(target_service), len(source_rule_name), len(protocol),
+                             uid, target_client, target_service, source_rule_name, protocol)
+
         elif type_ == MessageTypeConstant.PUSH_CONFIG:
             body =  json.dumps(data).encode()
         elif type_ == MessageTypeConstant.PING:
@@ -59,8 +74,9 @@ class NatSerialization:
         body_len = len(body)
         nonce = os.urandom(5)
         timestamp = struct.pack('I', int(time.time()))
-        signature = EncryptUtils.md5_hash(nonce + timestamp + body[:12] + key.encode())
-        header = type_.encode() + struct.pack('I', body_len) + nonce + timestamp + signature + EMPTY
+        # 使用 xxHash64 签名（8 字节，比 MD5 快 10 倍）
+        signature = EncryptUtils.xxhash64_hash(nonce + timestamp + body[:12] + key.encode())
+        header = type_.encode() + struct.pack('I', body_len) + nonce + timestamp + signature
         b =  header + body
         return EncryptUtils.encrypt(b, key)
 
@@ -68,8 +84,8 @@ class NatSerialization:
     def check_signature(cls, clear_text: bytes, data_len: int, key: str) -> bool:
         nonce_and_timestamp = clear_text[5:14]
         body = clear_text[HEADER_LEN: data_len + HEADER_LEN]
-        signature = clear_text[14:30]
-        return signature == EncryptUtils.md5_hash(nonce_and_timestamp + body[:12] + key.encode())
+        signature = clear_text[14:22]  # xxHash64 签名 8 字节
+        return signature == EncryptUtils.xxhash64_hash(nonce_and_timestamp + body[:12] + key.encode())
 
     @classmethod
     def check_nonce_and_timestamp(cls, clear_text: bytes) -> bool:
@@ -92,10 +108,12 @@ class NatSerialization:
         if not cls.check_nonce_and_timestamp(byte_data):
             raise ReplayError()
         if not cls.check_signature(byte_data, body_len, key):
+            print(f'SignatureError: {key}')
             raise SignatureError()
         body = byte_data[HEADER_LEN: body_len + HEADER_LEN]
         if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT,
-                              MessageTypeConstant.WEBSOCKET_OVER_UDP, MessageTypeConstant.REQUEST_TO_CONNECT_UDP):  # 添加UDP消息类型
+                              MessageTypeConstant.WEBSOCKET_OVER_UDP, MessageTypeConstant.REQUEST_TO_CONNECT_UDP,
+                              MessageTypeConstant.CONNECT_CONFIRMED, MessageTypeConstant.CONNECT_FAILED):  # 添加所有消息类型
             len_name, len_ip_port, len_bytes = struct.unpack('BBI', body[:8])
             uid, name, ip_port,  socket_dta = struct.unpack(f'4s{len_name}s{len_ip_port}s{len_bytes}s', body[8:])
             if compress and len(socket_dta):
@@ -105,6 +123,23 @@ class NatSerialization:
                 'name': name.decode(),
                 'ip_port': ip_port.decode(),
                 'data': socket_dta
+            }
+            return_data: MessageEntity = {
+                'type_': type_.decode(),
+                'data': data
+            }
+            return return_data
+        elif type_.decode() == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
+            # 解析 C2C 转发请求
+            len_target_client, len_target_service, len_source_rule_name, len_protocol = struct.unpack('BBBB', body[:4])
+            uid, target_client, target_service, source_rule_name, protocol = struct.unpack(
+                f'4s{len_target_client}s{len_target_service}s{len_source_rule_name}s{len_protocol}s', body[4:])
+            data = {
+                'uid': uid,
+                'target_client': target_client.decode(),
+                'target_service': target_service.decode(),
+                'source_rule_name': source_rule_name.decode(),
+                'protocol': protocol.decode()
             }
             return_data: MessageEntity = {
                 'type_': type_.decode(),
@@ -132,8 +167,12 @@ if __name__ == '__main__':
         print(''.join("b'{}'".format(''.join('\\x{:02x}'.format(b) for b in msg))))
 
 
-    data = {'type_': '5',
+    data = {'type_': 'a',
             'data': {'name': 'ssh',
+                     'target_client': 'abc',
+                     'target_service': 'abc',
+                     'source_rule_name': 'source_rule_name',
+                     'protocol': 'tcp',
                      # 'data': 'SSH-2.0-OpenSSH_7.8'.encode() ,
                      'data': b'' ,
                      'uid': os.urandom(4),
