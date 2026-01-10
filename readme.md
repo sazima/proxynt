@@ -36,7 +36,7 @@ pip install -U proxynt
 
 ## 使用教程
 
-假设公网服务器的 IP 是 `192.168.9.224`
+假设公网服务器的 IP 是 `43.144.9.224`
 
 ### 准备工作
 
@@ -72,7 +72,7 @@ nt_server -c config_s.json
 ```json
 {
   "server": {
-    "url": "ws://192.168.9.224:18888/websocket_path",
+    "url": "ws://43.144.9.224:18888/websocket_path",
     "password": "helloworld"
   },
   "client_name": "home_pc"
@@ -86,7 +86,7 @@ nt_client -c config_c.json
 
 **步骤 2：Web 界面配置端口映射**
 
-1. 打开浏览器访问：`http://192.168.9.224:18888/websocket_path/admin`
+1. 打开浏览器访问：`http://43.144.9.224:18888/websocket_path/admin`
 2. 输入管理密码 `admin123` 登录
 3. 找到客户端 `home_pc`，点击"转发配置"按钮
 4. 填写配置：
@@ -101,7 +101,7 @@ nt_client -c config_c.json
 
 现在任何人都可以通过公网 IP 访问你的内网服务：
 ```bash
-ssh -p 12222 user@192.168.9.224
+ssh -p 12222 user@43.144.9.224
 ```
 
 ---
@@ -120,7 +120,7 @@ ssh -p 12222 user@192.168.9.224
 ```json
 {
   "server": {
-    "url": "ws://192.168.9.224:18888/websocket_path",
+    "url": "ws://43.144.9.224:18888/websocket_path",
     "password": "helloworld"
   },
   "client_name": "office_pc"
@@ -131,7 +131,7 @@ ssh -p 12222 user@192.168.9.224
 ```json
 {
   "server": {
-    "url": "ws://192.168.9.224:18888/websocket_path",
+    "url": "ws://43.144.9.224:18888/websocket_path",
     "password": "helloworld"
   },
   "client_name": "home_pc"
@@ -145,7 +145,7 @@ nt_client -c config_c.json
 
 **步骤 2：Web 界面配置 C2C 规则**
 
-1. 打开管理页面：`http://192.168.9.224:18888/websocket_path/admin`
+1. 打开管理页面：`http://43.144.9.224:18888/websocket_path/admin`
 2. 点击任一客户端右侧的"C2C 规则"按钮
 ![img.png](config1.png)
 3. 填写配置：
@@ -187,7 +187,7 @@ ssh -p 12222 user@127.0.0.1
 ```json
 {
   "server": {
-    "url": "ws://192.168.9.224:18888/websocket_path",
+    "url": "ws://43.144.9.224:18888/websocket_path",
     "password": "helloworld"
   },
   "client_name": "my_computer",
