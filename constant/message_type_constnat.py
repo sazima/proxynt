@@ -17,3 +17,10 @@ class MessageTypeConstant:
 
     # 客户端到客户端转发
     CLIENT_TO_CLIENT_FORWARD = 'a'  # 客户端请求转发到另一个客户端
+
+    # P2P hole punching
+    P2P_OFFER = 'b'           # Client A requests P2P connection with client B
+    P2P_ANSWER = 'c'          # Client B responds to P2P request
+    P2P_CANDIDATE = 'd'       # Exchange NAT traversal information
+    P2P_SUCCESS = 'e'         # P2P connection established successfully
+    P2P_FAILED = 'f'          # P2P connection failed, fallback to relay

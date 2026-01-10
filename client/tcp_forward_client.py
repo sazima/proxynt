@@ -319,6 +319,12 @@ class TcpForwardClient:
             try:
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'create socket {name}, {uid}')
+
+                # Validate ip_port before splitting
+                if not ip_port or ':' not in ip_port:
+                    LoggerFactory.get_logger().error(f'Invalid ip_port: {repr(ip_port)}, name: {name}, uid: {uid.hex()}')
+                    return False
+
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.settimeout(5)
                 # Enable TCP_NODELAY to reduce latency (disable Nagle algorithm)

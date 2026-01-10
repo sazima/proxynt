@@ -21,6 +21,7 @@ class _ClientToClientRule(TypedDict, total=False):
     protocol: str
     speed_limit: float
     enabled: bool
+    p2p_enabled: bool        # Whether to enable P2P for this rule (default: True)
 
 
 class AdminEntity(TypedDict):

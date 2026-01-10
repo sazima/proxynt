@@ -85,6 +85,12 @@ class NatSerialization:
             body =  json.dumps(data).encode()
         elif type_ == MessageTypeConstant.PING:
             body =  b''
+        elif type_ in (MessageTypeConstant.P2P_OFFER, MessageTypeConstant.P2P_ANSWER,
+                      MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
+                      MessageTypeConstant.P2P_FAILED):
+            # P2P messages: use JSON encoding of data content only
+            data_content = data.get('data', {})
+            body = json.dumps(data_content).encode()
         else:
             body =  b'error'
         body_len = len(body)
@@ -205,6 +211,16 @@ class NatSerialization:
             return_data: MessageEntity = {
                 'type_': type_.decode(),
                 'data': None
+            }
+            return return_data
+        elif type_.decode() in (MessageTypeConstant.P2P_OFFER, MessageTypeConstant.P2P_ANSWER,
+                                MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
+                                MessageTypeConstant.P2P_FAILED):
+            # P2P messages: JSON decode
+            data = json.loads(body.decode())
+            return_data: MessageEntity = {
+                'type_': type_.decode(),
+                'data': data
             }
             return return_data
         else:

@@ -43,6 +43,11 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     compress_support: bool = False  # Whether snappy compression is supported
 
+    # P2P support
+    p2p_supported: bool = False  # Whether client supports P2P
+    public_ip: str = None        # Client's public IP
+    public_port: int = None      # Client's public port (WebSocket connection port)
+
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock: Lock
 
@@ -63,7 +68,18 @@ class MyWebSocketaHandler(WebSocketHandler):
             msg = 'python-snappy is not installed on the server'
             LoggerFactory.get_logger().info(msg)
             self.close(reason=msg)
-        LoggerFactory.get_logger().info(f'New WebSocket connection opened, compression supported: {self.compress_support}')
+
+        # Record client's public IP and port for P2P
+        self.public_ip = self.request.remote_ip
+        try:
+            # Get the port from the connection (Note: this is the client's source port, not necessarily the NAT port)
+            peer_address = self.request.connection.stream.socket.getpeername()
+            self.public_port = peer_address[1]
+        except Exception as e:
+            LoggerFactory.get_logger().warning(f'Failed to get client port: {e}')
+            self.public_port = 0
+
+        LoggerFactory.get_logger().info(f'New WebSocket connection opened from {self.public_ip}:{self.public_port}, compression supported: {self.compress_support}')
 
     async def write_message(self, message, binary=False):
         start_time = time.time()
@@ -183,6 +199,11 @@ class MyWebSocketaHandler(WebSocketHandler):
                     push_config: PushConfigEntity = message_dict['data']
                     client_name = push_config['client_name']
                     self.version = push_config.get('version')
+
+                    # Check if client supports P2P
+                    self.p2p_supported = push_config.get('p2p_supported', False)
+                    if self.p2p_supported:
+                        LoggerFactory.get_logger().info(f'Client {client_name} supports P2P, public address: {self.public_ip}:{self.public_port}')
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
                     if client_name in self.client_name_to_handler:
                         self.close(None, 'DuplicatedClientName')  # Duplicated client name on server
@@ -241,21 +262,31 @@ class MyWebSocketaHandler(WebSocketHandler):
 
                     # 推送此客户端相关的 C2C 规则（作为源客户端的规则）
                     c2c_rules = ContextUtils.get_c2c_rules()
-                    client_c2c_rules = [
-                        {
-                            'name': rule['name'],
-                            'target_client': rule['target_client'],
-                            'target_service': rule['target_service'],
-                            'local_port': rule['local_port'],
-                            'local_ip': rule['local_ip'],
-                            'protocol': rule['protocol'],
-                            'speed_limit': rule.get('speed_limit', 0.0)
-                        }
-                        for rule in c2c_rules
-                        if rule.get('source_client') == client_name and rule.get('enabled', True)
-                    ]
+                    client_c2c_rules = []
+                    for rule in c2c_rules:
+                        if rule.get('source_client') == client_name and rule.get('enabled', True):
+                            client_rule = {
+                                'name': rule['name'],
+                                'target_client': rule['target_client'],
+                                'local_port': rule['local_port'],
+                                'local_ip': rule['local_ip'],
+                                'protocol': rule['protocol'],
+                                'speed_limit': rule.get('speed_limit', 0.0),
+                                'p2p_enabled': rule.get('p2p_enabled', True)
+                            }
+                            # Add mode-specific fields
+                            if 'target_ip' in rule and 'target_port' in rule:
+                                client_rule['target_ip'] = rule['target_ip']
+                                client_rule['target_port'] = rule['target_port']
+                            else:
+                                client_rule['target_service'] = rule['target_service']
+                            client_c2c_rules.append(client_rule)
                     message_dict['data']['client_to_client_rules'] = client_c2c_rules
                     LoggerFactory.get_logger().info(f'send  {len(client_c2c_rules)}  C2C to  {client_name}')
+
+                    # Send client's public IP and port back (for P2P hole punching)
+                    message_dict['data']['public_ip'] = self.public_ip
+                    message_dict['data']['public_port'] = self.public_port
 
                 await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support), binary=True)
             elif message_dict['type_'] == MessageTypeConstant.PING:
@@ -360,8 +391,13 @@ class MyWebSocketaHandler(WebSocketHandler):
                 # 3. Determine target IP and port
                 if use_direct_mode:
                     # Direct mode: use target_ip and target_port from the rule
+                    if not target_ip or not target_port:
+                        LoggerFactory.get_logger().error(f'Direct mode but target_ip or target_port is empty: ip={target_ip}, port={target_port}')
+                        await self._send_connection_failed(uid, source_rule_name)
+                        return
                     ip_port = f"{target_ip}:{target_port}"
                     service_name = source_rule_name  # Use rule name as service name
+                    LoggerFactory.get_logger().debug(f'Direct mode: ip_port={ip_port}, service_name={service_name}')
                 else:
                     # Service mode: find target service configuration (backward compatible)
                     target_service_config = self._find_service_config(target_handler, target_service)
@@ -371,13 +407,66 @@ class MyWebSocketaHandler(WebSocketHandler):
                         return
                     ip_port = f"{target_service_config['local_ip']}:{target_service_config['local_port']}"
                     service_name = target_service
+                    LoggerFactory.get_logger().debug(f'Service mode: ip_port={ip_port}, service_name={service_name}')
 
                 # 4. Store routing information
                 async with self.c2c_lock:
                     self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol)
 
-                # 5. Forward REQUEST_TO_CONNECT to target client
+                # 4.5. Try P2P if both clients support it AND rule allows it (only for TCP)
+                p2p_attempted = False
+                rule_p2p_enabled = rule.get('p2p_enabled', True)  # Default to True if not specified
+                if protocol == 'tcp' and rule_p2p_enabled and self.p2p_supported and target_handler.p2p_supported:
+                    LoggerFactory.get_logger().info(f'Both clients support P2P, attempting hole punching: {self.client_name} ↔ {target_client}')
+                    p2p_attempted = True
+
+                    # Convert uid bytes to hex string for JSON serialization
+                    uid_hex = uid.hex()
+
+                    # Send P2P_OFFER to source client (initiator)
+                    p2p_offer_to_source: MessageEntity = {
+                        'type_': MessageTypeConstant.P2P_OFFER,
+                        'data': {
+                            'uid': uid_hex,
+                            'role': 'initiator',  # This client initiates the connection
+                            'peer_client': target_client,
+                            'peer_public_ip': target_handler.public_ip,
+                            'peer_public_port': target_handler.public_port,
+                            'service_name': service_name,
+                            'ip_port': ip_port
+                        }
+                    }
+                    await self.write_message(
+                        NatSerialization.dumps(p2p_offer_to_source, ContextUtils.get_password(), self.compress_support),
+                        binary=True
+                    )
+
+                    # Send P2P_OFFER to target client (responder)
+                    p2p_offer_to_target: MessageEntity = {
+                        'type_': MessageTypeConstant.P2P_OFFER,
+                        'data': {
+                            'uid': uid_hex,
+                            'role': 'responder',  # This client responds to the connection
+                            'peer_client': self.client_name,
+                            'peer_public_ip': self.public_ip,
+                            'peer_public_port': self.public_port,
+                            'service_name': service_name,
+                            'ip_port': ip_port
+                        }
+                    }
+                    await target_handler.write_message(
+                        NatSerialization.dumps(p2p_offer_to_target, ContextUtils.get_password(), target_handler.compress_support),
+                        binary=True
+                    )
+
+                    LoggerFactory.get_logger().info(f'P2P offers sent to both clients')
+                    # Note: We still send REQUEST_TO_CONNECT as fallback
+                    # If P2P succeeds, clients will use P2P; if fails, they'll use WebSocket relay
+
+                # 5. Forward REQUEST_TO_CONNECT to target client (always send as fallback)
                 message_type = MessageTypeConstant.REQUEST_TO_CONNECT if protocol == 'tcp' else MessageTypeConstant.REQUEST_TO_CONNECT_UDP
+
+                LoggerFactory.get_logger().debug(f'Preparing REQUEST_TO_CONNECT: service_name={service_name}, ip_port={ip_port}, uid={uid.hex()}')
 
                 forward_message: MessageEntity = {
                     'type_': message_type,

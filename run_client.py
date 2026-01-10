@@ -38,6 +38,7 @@ from common.websocket import WebSocketException, ABNF, WebSocketConnectionClosed
 from client.udp_forward_client import UdpForwardClient
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
+from client.p2p_hole_punch import P2PHolePunch
 from common import websocket
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
@@ -138,13 +139,27 @@ class WebsocketClient:
         self.config_data: ClientConfigEntity = config_data
         self.compress_support: bool = config_data['server']['compress']
 
+        # P2P support
+        self.public_ip: str = None  # Client's public IP (received from server)
+        self.public_port: int = None  # Client's public port (received from server)
+        self.p2p_hole_punch: P2PHolePunch = None  # P2P hole punching manager
+        self.p2p_connections: Dict[bytes, dict] = {}  # uid -> {role, peer_client, service_name, ip_port}
+
+        # Initialize P2P module (always initialize, enable/disable per rule)
+        self.p2p_hole_punch = P2PHolePunch()
+        self.p2p_hole_punch.on_connection_established = self._on_p2p_established
+        self.p2p_hole_punch.on_connection_failed = self._on_p2p_failed
+        self.p2p_hole_punch.on_data_received = self._on_p2p_data_received
+        self.p2p_hole_punch.start()
+        LoggerFactory.get_logger().info('P2P hole punching service started')
+
 
     def on_message(self, ws, message: bytes):
         try:
             message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support)
             start_time = time.time()
             time_ = message_data['type_']
-
+            self.heart_beat_task.set_recv_heart_beat_time(time.time())  # 所有的消息等更新心跳时间
             # Handle TCP messages
             if message_data['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
                 data: TcpOverWebsocketMessage = message_data['data']
@@ -186,6 +201,13 @@ class WebsocketClient:
                 self.heart_beat_task.set_recv_heart_beat_time(time.time())
             elif message_data['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 push_config: PushConfigEntity = message_data['data']
+
+                # Receive public IP and port from server (for P2P)
+                self.public_ip = push_config.get('public_ip')
+                self.public_port = push_config.get('public_port')
+                if self.public_ip:
+                    LoggerFactory.get_logger().info(f'P2P supported, public address: {self.public_ip}:{self.public_port}')
+
                 for d in push_config['config_list']:
                     # Set speed limiter
                     if d.get('speed_limit'):
@@ -199,6 +221,18 @@ class WebsocketClient:
                     self.forward_client.setup_c2c_tcp_listeners(c2c_rules)
                     # Setup C2C UDP listeners
                     self.udp_forward_client.setup_c2c_udp_listeners(c2c_rules)
+
+            # Handle P2P OFFER
+            elif message_data['type_'] == MessageTypeConstant.P2P_OFFER:
+                self._handle_p2p_offer(message_data['data'])
+
+            # Handle P2P SUCCESS (from peer)
+            elif message_data['type_'] == MessageTypeConstant.P2P_SUCCESS:
+                self._handle_p2p_success(message_data['data'])
+
+            # Handle P2P FAILED (from peer)
+            elif message_data['type_'] == MessageTypeConstant.P2P_FAILED:
+                self._handle_p2p_failed(message_data['data'])
 
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
@@ -229,7 +263,8 @@ class WebsocketClient:
                     'key': ContextUtils.get_password(),
                     'config_list': push_client_data,
                     "client_name": client_name,
-                    'version': SystemConstant.VERSION
+                    'version': SystemConstant.VERSION,
+                    'p2p_supported': True  # Always declare P2P support (enable/disable per rule)
                 }
                 message: MessageEntity = {
                     'type_': MessageTypeConstant.PUSH_CONFIG,
@@ -243,6 +278,134 @@ class WebsocketClient:
                 self.heart_beat_task.is_running = True
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
+
+    def _handle_p2p_offer(self, data: dict):
+        """Handle P2P OFFER message from server"""
+        if not self.p2p_hole_punch:
+            LoggerFactory.get_logger().error('P2P module not initialized, ignoring P2P_OFFER')
+            return
+
+        # Convert uid from hex string to bytes
+        uid_hex = data['uid']
+        uid = bytes.fromhex(uid_hex)
+        role = data['role']  # 'initiator' or 'responder'
+        peer_client = data['peer_client']
+        peer_public_ip = data['peer_public_ip']
+        peer_public_port = data['peer_public_port']
+        service_name = data['service_name']
+        ip_port = data['ip_port']
+
+        LoggerFactory.get_logger().info(f'Received P2P_OFFER: role={role}, peer={peer_client}, peer_addr={peer_public_ip}:{peer_public_port}')
+
+        # Store connection info
+        self.p2p_connections[uid] = {
+            'role': role,
+            'peer_client': peer_client,
+            'service_name': service_name,
+            'ip_port': ip_port,
+            'peer_public_ip': peer_public_ip,
+            'peer_public_port': peer_public_port
+        }
+
+        # Initiate P2P connection
+        success = self.p2p_hole_punch.initiate_connection(uid, peer_public_ip, peer_public_port)
+        if not success:
+            LoggerFactory.get_logger().error(f'Failed to initiate P2P connection for UID {uid.hex()}')
+            # Notify server about failure (will use WebSocket fallback)
+            self._send_p2p_failed(uid)
+
+    def _on_p2p_established(self, uid: bytes):
+        """Callback when P2P connection is established"""
+        conn_info = self.p2p_connections.get(uid)
+        if not conn_info:
+            LoggerFactory.get_logger().warning(f'P2P connection established but no info found for UID {uid.hex()}')
+            return
+
+        LoggerFactory.get_logger().info(f'P2P connection established: UID {uid.hex()}, peer={conn_info["peer_client"]}')
+
+        # Notify server and peer about success
+        self._send_p2p_success(uid)
+
+        # If this is the responder, also need to connect to local service
+        if conn_info['role'] == 'responder':
+            # Create local socket connection
+            ip_port = conn_info['ip_port']
+            service_name = conn_info['service_name']
+            # Tell forward client to create socket for this UID (but mark it as P2P)
+            # For now, we'll let the normal flow handle local connection
+            LoggerFactory.get_logger().info(f'P2P responder ready for UID {uid.hex()}')
+
+    def _on_p2p_failed(self, uid: bytes):
+        """Callback when P2P connection failed"""
+        conn_info = self.p2p_connections.get(uid)
+        if conn_info:
+            LoggerFactory.get_logger().warning(f'P2P connection failed: UID {uid.hex()}, peer={conn_info["peer_client"]}, falling back to WebSocket relay')
+        else:
+            LoggerFactory.get_logger().warning(f'P2P connection failed for UID {uid.hex()}')
+
+        # Notify server about failure (server will handle WebSocket fallback)
+        self._send_p2p_failed(uid)
+
+        # Clean up
+        self.p2p_connections.pop(uid, None)
+
+    def _on_p2p_data_received(self, uid: bytes, data: bytes):
+        """Callback when P2P data is received"""
+        conn_info = self.p2p_connections.get(uid)
+        if not conn_info:
+            LoggerFactory.get_logger().warning(f'P2P data received but no connection info for UID {uid.hex()}')
+            return
+
+        # Forward data to local service
+        if conn_info['role'] == 'responder':
+            # Responder: forward to local service
+            self.forward_client.send_by_uid(uid, data)
+        else:
+            # Initiator: forward to local application
+            self.forward_client.send_by_uid(uid, data)
+
+    def _handle_p2p_success(self, data: dict):
+        """Handle P2P_SUCCESS message from peer (via server)"""
+        uid_hex = data.get('uid')
+        if uid_hex:
+            uid = bytes.fromhex(uid_hex) if isinstance(uid_hex, str) else uid_hex
+            LoggerFactory.get_logger().info(f'Peer confirmed P2P success for UID {uid.hex()}')
+
+    def _handle_p2p_failed(self, data: dict):
+        """Handle P2P_FAILED message from peer (via server)"""
+        uid_hex = data.get('uid')
+        if uid_hex:
+            uid = bytes.fromhex(uid_hex) if isinstance(uid_hex, str) else uid_hex
+            LoggerFactory.get_logger().info(f'Peer reported P2P failure for UID {uid.hex()}, using WebSocket fallback')
+            # Clean up local P2P connection if exists
+            if self.p2p_hole_punch:
+                self.p2p_hole_punch.close_connection(uid)
+            self.p2p_connections.pop(uid, None)
+
+    def _send_p2p_success(self, uid: bytes):
+        """Send P2P_SUCCESS message to server"""
+        try:
+            message: MessageEntity = {
+                'type_': MessageTypeConstant.P2P_SUCCESS,
+                'data': {'uid': uid.hex()}  # Convert bytes to hex string for JSON serialization
+            }
+            self.ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+            LoggerFactory.get_logger().debug(f'Sent P2P_SUCCESS for UID {uid.hex()}')
+        except Exception as e:
+            LoggerFactory.get_logger().error(f'Failed to send P2P_SUCCESS: {e}')
+
+    def _send_p2p_failed(self, uid: bytes):
+        """Send P2P_FAILED message to server"""
+        try:
+            message: MessageEntity = {
+                'type_': MessageTypeConstant.P2P_FAILED,
+                'data': {'uid': uid.hex()}  # Convert bytes to hex string for JSON serialization
+            }
+            self.ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+            LoggerFactory.get_logger().debug(f'Sent P2P_FAILED for UID {uid.hex()}')
+        except Exception as e:
+            LoggerFactory.get_logger().error(f'Failed to send P2P_FAILED: {e}')
+
     def on_error(self, ws, error):
         LoggerFactory.get_logger().error(f'error:  {error} ')
 
@@ -251,6 +414,10 @@ class WebsocketClient:
             LoggerFactory.get_logger().info(f'close, {a}, {b} ')
             self.heart_beat_task.is_running = False
             self.forward_client.close()
+            # Stop P2P service
+            if self.p2p_hole_punch:
+                self.p2p_hole_punch.stop()
+                LoggerFactory.get_logger().info('P2P hole punching service stopped')
 
 def signal_handler(sig, frame):
     print('You pressed Ctrl+C!')

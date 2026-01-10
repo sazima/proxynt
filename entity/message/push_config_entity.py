@@ -23,11 +23,15 @@ class ClientToClientRule(TypedDict, total=False):
     local_ip: str            # Source client local listening IP
     protocol: str            # tcp or udp
     speed_limit: float       # Speed limit
+    p2p_enabled: bool        # Whether to enable P2P for this rule (default: True)
 
 
-class PushConfigEntity(TypedDict):
+class PushConfigEntity(TypedDict, total=False):
     key: str
     version: str
-    config_list: List[ClientData]  # 转发配置列表
-    client_name: str  # 客户端名称
-    client_to_client_rules: List[ClientToClientRule]  # C2C 转发规则（可选）
+    config_list: List[ClientData]  # Forward configuration list
+    client_name: str  # Client name
+    client_to_client_rules: List[ClientToClientRule]  # C2C forward rules (optional)
+    p2p_supported: bool  # Whether client supports P2P (optional)
+    public_ip: str  # Client's public IP (filled by server, optional)
+    public_port: int  # Client's public port (filled by server, optional)

@@ -389,6 +389,7 @@ class AdminC2CRuleHandler(RequestHandler):
             protocol = request_data.get('protocol', 'tcp')
             speed_limit = float(request_data.get('speed_limit', 0.0))
             enabled = request_data.get('enabled', True)
+            p2p_enabled = request_data.get('p2p_enabled', True)
             is_edit = request_data.get('is_edit', False)
 
             # Check if using direct mode (target_ip + target_port) or service mode (target_service)
@@ -449,7 +450,8 @@ class AdminC2CRuleHandler(RequestHandler):
                 'local_ip': local_ip,
                 'protocol': protocol,
                 'speed_limit': speed_limit,
-                'enabled': enabled
+                'enabled': enabled,
+                'p2p_enabled': p2p_enabled
             }
 
             # Add mode-specific fields

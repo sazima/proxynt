@@ -15,6 +15,11 @@ class SystemConstant:
 
     COOKIE_EXPIRE_SECONDS = 3600 * 24
 
-    VERSION = '2.0.3'
+    VERSION = '2.0.7'
 
     GITHUB = 'https://github.com/sazima/proxynt'
+
+    # P2P settings
+    P2P_SUPPORTED_VERSION = '2.0.3'  # Minimum version that supports P2P
+    P2P_HOLE_PUNCH_TIMEOUT = 5       # Seconds to wait for hole punching
+    P2P_MAX_RETRY = 3                # Max retry attempts for hole punching

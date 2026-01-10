@@ -63,8 +63,10 @@ class HeartBeatTask:
         """超时关闭"""
         asyncio.set_event_loop(self.loop)
         client_name_to_handler = MyWebSocketaHandler.client_name_to_handler
-        for _, h in client_name_to_handler.items():
-            t = h.recv_time
+        for client_name, h in client_name_to_handler.items():
+            last_activity = self.last_business_activity.get(client_name, 0)
+            _t = h.recv_time
+            t = max([last_activity, _t])
             if (time.time() - t) > SystemConstant.MAX_HEART_BEAT_SECONDS:
                 LoggerFactory.get_logger().info(f'receive heart timeout {time.time() - t}, close client ')
                 try:
