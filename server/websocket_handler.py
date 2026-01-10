@@ -52,8 +52,9 @@ class MyWebSocketaHandler(WebSocketHandler):
     lock: Lock
 
     # 客户端到客户端转发路由状态
-    # uid → (source_handler, target_handler, rule_name, protocol)
-    c2c_uid_to_routing: Dict[bytes, Tuple['MyWebSocketaHandler', 'MyWebSocketaHandler', str, str]] = {}
+    # uid → (source_handler, target_handler, rule_name, protocol, target_ip_port)
+    # 增加 target_ip_port 字段用于在中转模式下补全数据
+    c2c_uid_to_routing: Dict[bytes, Tuple['MyWebSocketaHandler', 'MyWebSocketaHandler', str, str, str]] = {}
     c2c_lock: Lock = Lock()
 
     def open(self, *args: str, **kwargs: str):
@@ -73,8 +74,12 @@ class MyWebSocketaHandler(WebSocketHandler):
         self.public_ip = self.request.remote_ip
         try:
             # Get the port from the connection (Note: this is the client's source port, not necessarily the NAT port)
-            peer_address = self.request.connection.stream.socket.getpeername()
-            self.public_port = peer_address[1]
+            # 尝试获取真实端口，如果经过了 Nginx 且没有传递端口，这里可能获取不到准确的
+            if self.request.connection and self.request.connection.stream and self.request.connection.stream.socket:
+                peer_address = self.request.connection.stream.socket.getpeername()
+                self.public_port = peer_address[1]
+            else:
+                self.public_port = 0
         except Exception as e:
             LoggerFactory.get_logger().warning(f'Failed to get client port: {e}')
             self.public_port = 0
@@ -115,8 +120,6 @@ class MyWebSocketaHandler(WebSocketHandler):
             # 智能心跳：记录业务活动（非 PING 消息）
             if self.client_name and message_dict['type_'] != MessageTypeConstant.PING:
                 from server.task.heart_beat_task import HeartBeatTask
-                # 假设 HeartBeatTask 实例可以通过 ContextUtils 获取
-                # 这里需要在 run_server.py 中保存实例引用
                 heart_beat_task = ContextUtils.get_heart_beat_task()
                 if heart_beat_task:
                     heart_beat_task.update_business_activity(self.client_name)
@@ -127,21 +130,30 @@ class MyWebSocketaHandler(WebSocketHandler):
 
                 # 检查是否为 C2C 连接
                 if uid in self.c2c_uid_to_routing:
-                    source_handler, target_handler, rule_name, protocol = self.c2c_uid_to_routing[uid]
+                    source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
 
                     # 确定路由方向并转发
                     if self == source_handler:
                         # 数据从源客户端 (C) → 目标客户端 (A)
-                        await target_handler.write_message(
-                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                  target_handler.compress_support),
-                            binary=True
-                        )
+                        # 【关键修复】如果源客户端发来的 ip_port 为空，服务器负责补全
+                        if not data.get('ip_port'):
+                            data['ip_port'] = target_ip_port
+                            # 重新序列化消息
+                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
+                            await target_handler.write_message(message, binary=True)
+                        else:
+                            # 正常转发
+                            await target_handler.write_message(
+                                NatSerialization.dumps(message_dict, ContextUtils.get_password(),
+                                                       target_handler.compress_support),
+                                binary=True
+                            )
                     elif self == target_handler:
                         # 数据从目标客户端 (A) → 源客户端 (C)
+                        # 回复数据通常不需要 ip_port，源客户端根据 UID 路由
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                  source_handler.compress_support),
+                                                   source_handler.compress_support),
                             binary=True
                         )
 
@@ -159,28 +171,31 @@ class MyWebSocketaHandler(WebSocketHandler):
 
                 # 检查是否为 C2C 连接
                 if uid in self.c2c_uid_to_routing:
-                    source_handler, target_handler, rule_name, protocol = self.c2c_uid_to_routing[uid]
+                    source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
 
                     # 确定路由方向并转发
                     if self == source_handler:
                         # 数据从源客户端 (C) → 目标客户端 (A)
-                        await target_handler.write_message(
-                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                  target_handler.compress_support),
-                            binary=True
-                        )
+                        if not data.get('ip_port'):
+                            data['ip_port'] = target_ip_port
+                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
+                            await target_handler.write_message(message, binary=True)
+                        else:
+                            await target_handler.write_message(
+                                NatSerialization.dumps(message_dict, ContextUtils.get_password(),
+                                                       target_handler.compress_support),
+                                binary=True
+                            )
                     elif self == target_handler:
                         # 数据从目标客户端 (A) → 源客户端 (C)
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                  source_handler.compress_support),
+                                                   source_handler.compress_support),
                             binary=True
                         )
                 else:
                     # 现有的外部 UDP 转发逻辑
                     port = 0
-
-                    # Find corresponding UDP port
                     for p, srv in list(UdpForwardClient.get_instance().udp_servers.items()):
                         for endpoint_uid, endpoint in srv.uid_to_endpoint.items():
                             if endpoint_uid == uid:
@@ -299,20 +314,22 @@ class MyWebSocketaHandler(WebSocketHandler):
 
                 # 检查是否为 C2C 连接
                 if uid in self.c2c_uid_to_routing:
-                    source_handler, target_handler, rule_name, protocol = self.c2c_uid_to_routing[uid]
+                    source_handler, target_handler, rule_name, protocol, _ = self.c2c_uid_to_routing[uid]
                     # 转发确认消息到源客户端 (C)
                     if self == target_handler:  # 消息来自目标客户端 (A)
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                  source_handler.compress_support),
+                                                   source_handler.compress_support),
                             binary=True
                         )
-                        LoggerFactory.get_logger().info(f'C2C 连接已确认并转发到源客户端 UID: {uid.hex()}')
+                        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                            LoggerFactory.get_logger().debug(f'C2C 连接已确认并转发到源客户端 UID: {uid.hex()}')
                 elif uid in tcp_forward_client.uid_to_connection:
                     # 现有的外部转发逻辑
                     connection = tcp_forward_client.uid_to_connection[uid]
                     connection.connection_confirmed = True
-                    LoggerFactory.get_logger().info(f'连接已确认 uid: {uid}, 发送缓存数据 {len(connection.early_data_buffer)} 个包')
+                    if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                        LoggerFactory.get_logger().debug(f'连接已确认 uid: {uid}, 发送缓存数据 {len(connection.early_data_buffer)} 个包')
 
                     # 发送缓存的早期数据
                     for buffered_data in connection.early_data_buffer:
@@ -336,12 +353,12 @@ class MyWebSocketaHandler(WebSocketHandler):
 
                 # 检查是否为 C2C 连接
                 if uid in self.c2c_uid_to_routing:
-                    source_handler, target_handler, rule_name, protocol = self.c2c_uid_to_routing[uid]
+                    source_handler, target_handler, rule_name, protocol, _ = self.c2c_uid_to_routing[uid]
                     # 转发失败消息到源客户端 (C)
                     if self == target_handler:  # 消息来自目标客户端 (A)
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                  source_handler.compress_support),
+                                                   source_handler.compress_support),
                             binary=True
                         )
                     # 清理路由表
@@ -409,14 +426,18 @@ class MyWebSocketaHandler(WebSocketHandler):
                     service_name = target_service
                     LoggerFactory.get_logger().debug(f'Service mode: ip_port={ip_port}, service_name={service_name}')
 
-                # 4. Store routing information
+                # 4. Store routing information (Including ip_port now)
                 async with self.c2c_lock:
-                    self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol)
+                    self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol, ip_port)
 
                 # 4.5. Try P2P if both clients support it AND rule allows it (only for TCP)
                 p2p_attempted = False
                 rule_p2p_enabled = rule.get('p2p_enabled', True)  # Default to True if not specified
-                if protocol == 'tcp' and rule_p2p_enabled and self.p2p_supported and target_handler.p2p_supported:
+                # P2P check: both support it, and public ports are valid (not 0)
+                if (protocol == 'tcp' and rule_p2p_enabled and
+                        self.p2p_supported and self.public_port > 0 and
+                        target_handler.p2p_supported and target_handler.public_port > 0):
+
                     LoggerFactory.get_logger().info(f'Both clients support P2P, attempting hole punching: {self.client_name} ↔ {target_client}')
                     p2p_attempted = True
 
@@ -460,8 +481,9 @@ class MyWebSocketaHandler(WebSocketHandler):
                     )
 
                     LoggerFactory.get_logger().info(f'P2P offers sent to both clients')
-                    # Note: We still send REQUEST_TO_CONNECT as fallback
-                    # If P2P succeeds, clients will use P2P; if fails, they'll use WebSocket relay
+                else:
+                    if protocol == 'tcp' and rule_p2p_enabled:
+                        LoggerFactory.get_logger().info(f'Skipping P2P: Support status: Self={self.p2p_supported}({self.public_port}), Target={target_handler.p2p_supported}({target_handler.public_port})')
 
                 # 5. Forward REQUEST_TO_CONNECT to target client (always send as fallback)
                 message_type = MessageTypeConstant.REQUEST_TO_CONNECT if protocol == 'tcp' else MessageTypeConstant.REQUEST_TO_CONNECT_UDP
@@ -504,7 +526,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     # 清理 C2C 连接（此客户端作为源或目标）
                     async with self.c2c_lock:
                         uids_to_remove = []
-                        for uid, (source_handler, target_handler, rule_name, protocol) in list(self.c2c_uid_to_routing.items()):
+                        for uid, (source_handler, target_handler, rule_name, protocol, _) in list(self.c2c_uid_to_routing.items()):
                             if source_handler == self or target_handler == self:
                                 uids_to_remove.append(uid)
                                 # 通知另一端关闭连接
@@ -521,7 +543,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 try:
                                     await other_handler.write_message(
                                         NatSerialization.dumps(close_message, ContextUtils.get_password(),
-                                                              other_handler.compress_support),
+                                                               other_handler.compress_support),
                                         binary=True
                                     )
                                 except Exception as e:
@@ -546,8 +568,8 @@ class MyWebSocketaHandler(WebSocketHandler):
         """查找并验证 C2C 规则"""
         for rule in c2c_rules:
             if (rule['name'] == rule_name and
-                rule['source_client'] == source_client and
-                rule['target_client'] == target_client):
+                    rule['source_client'] == source_client and
+                    rule['target_client'] == target_client):
                 return rule
         return None
 

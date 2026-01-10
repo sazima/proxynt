@@ -297,6 +297,13 @@ class WebsocketClient:
 
         LoggerFactory.get_logger().info(f'Received P2P_OFFER: role={role}, peer={peer_client}, peer_addr={peer_public_ip}:{peer_public_port}')
 
+        if peer_public_port <= 0:
+            LoggerFactory.get_logger().warning(f'Invalid peer public port {peer_public_port}, skipping P2P attempt.')
+            # Directly trigger failure callback to clean up or notify server if needed,
+            # but usually server will rely on request_to_connect for fallback.
+            self._send_p2p_failed(uid)
+            return
+
         # Store connection info
         self.p2p_connections[uid] = {
             'role': role,
