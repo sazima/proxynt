@@ -53,7 +53,6 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     # 客户端到客户端转发路由状态
     # uid → (source_handler, target_handler, rule_name, protocol, target_ip_port)
-    # 增加 target_ip_port 字段用于在中转模式下补全数据
     c2c_uid_to_routing: Dict[bytes, Tuple['MyWebSocketaHandler', 'MyWebSocketaHandler', str, str, str]] = {}
     c2c_lock: Lock = Lock()
 
@@ -74,7 +73,6 @@ class MyWebSocketaHandler(WebSocketHandler):
         self.public_ip = self.request.remote_ip
         try:
             # Get the port from the connection (Note: this is the client's source port, not necessarily the NAT port)
-            # 尝试获取真实端口，如果经过了 Nginx 且没有传递端口，这里可能获取不到准确的
             if self.request.connection and self.request.connection.stream and self.request.connection.stream.socket:
                 peer_address = self.request.connection.stream.socket.getpeername()
                 self.public_port = peer_address[1]
@@ -129,20 +127,29 @@ class MyWebSocketaHandler(WebSocketHandler):
                 uid = data['uid']
 
                 # 检查是否为 C2C 连接
-                if uid in self.c2c_uid_to_routing:
+                is_c2c = uid in self.c2c_uid_to_routing
+
+                # --- 安全检查：连接所有权校验 ---
+                if not is_c2c:
+                    # 检查此 UID 是否属于当前 WebSocket 连接
+                    # TcpForwardClient 维护了 uid -> connection -> socket_server -> websocket_handler
+                    conn = tcp_forward_client.uid_to_connection.get(uid)
+                    if not conn or conn.socket_server.websocket_handler != self:
+                        LoggerFactory.get_logger().warning(f"Security Alert: Client {self.client_name} tried to inject TCP data to UID {uid.hex()} belonging to another client/session.")
+                        return
+                # -------------------------------
+
+                if is_c2c:
                     source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
 
                     # 确定路由方向并转发
                     if self == source_handler:
                         # 数据从源客户端 (C) → 目标客户端 (A)
-                        # 【关键修复】如果源客户端发来的 ip_port 为空，服务器负责补全
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
-                            # 重新序列化消息
                             message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
                             await target_handler.write_message(message, binary=True)
                         else:
-                            # 正常转发
                             await target_handler.write_message(
                                 NatSerialization.dumps(message_dict, ContextUtils.get_password(),
                                                        target_handler.compress_support),
@@ -150,7 +157,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                             )
                     elif self == target_handler:
                         # 数据从目标客户端 (A) → 源客户端 (C)
-                        # 回复数据通常不需要 ip_port，源客户端根据 UID 路由
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
                                                    source_handler.compress_support),
@@ -170,7 +176,25 @@ class MyWebSocketaHandler(WebSocketHandler):
                 uid = data['uid']
 
                 # 检查是否为 C2C 连接
-                if uid in self.c2c_uid_to_routing:
+                is_c2c = uid in self.c2c_uid_to_routing
+
+                # --- 安全检查：连接所有权校验 ---
+                if not is_c2c:
+                    is_owned = False
+                    udp_client = UdpForwardClient.get_instance()
+                    # 检查该 UID 是否存在于属于当前客户端的 UDP Server 中
+                    if self.client_name in udp_client.client_name_to_udp_server_set:
+                        for server in udp_client.client_name_to_udp_server_set[self.client_name]:
+                            if server.get_endpoint_by_uid(uid):
+                                is_owned = True
+                                break
+
+                    if not is_owned:
+                        LoggerFactory.get_logger().warning(f"Security Alert: Client {self.client_name} tried to inject UDP data to UID {uid.hex()} belonging to another client/session.")
+                        return
+                # -------------------------------
+
+                if is_c2c:
                     source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
 
                     # 确定路由方向并转发
@@ -196,6 +220,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                 else:
                     # 现有的外部 UDP 转发逻辑
                     port = 0
+
+                    # Find corresponding UDP port
                     for p, srv in list(UdpForwardClient.get_instance().udp_servers.items()):
                         for endpoint_uid, endpoint in srv.uid_to_endpoint.items():
                             if endpoint_uid == uid:
@@ -378,17 +404,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                 source_rule_name = data['source_rule_name']
                 protocol = data['protocol']
 
-                # Check if using direct mode (target_ip + target_port) or service mode (target_service)
-                use_direct_mode = 'target_ip' in data and 'target_port' in data
-
-                if use_direct_mode:
-                    target_ip = data['target_ip']
-                    target_port = data['target_port']
-                    LoggerFactory.get_logger().info(f'C2C forward request (direct mode): {self.client_name} → {target_client}/{target_ip}:{target_port} (UID: {uid.hex()}, protocol: {protocol})')
-                else:
-                    target_service = data['target_service']
-                    LoggerFactory.get_logger().info(f'C2C forward request (service mode): {self.client_name} → {target_client}/{target_service} (UID: {uid.hex()}, protocol: {protocol})')
-
                 # 1. Verify rule exists and is enabled
                 c2c_rules = ContextUtils.get_c2c_rules()
                 rule = self._find_c2c_rule(source_rule_name, self.client_name, target_client, c2c_rules)
@@ -406,17 +421,27 @@ class MyWebSocketaHandler(WebSocketHandler):
                 target_handler = self.client_name_to_handler[target_client]
 
                 # 3. Determine target IP and port
-                if use_direct_mode:
-                    # Direct mode: use target_ip and target_port from the rule
-                    if not target_ip or not target_port:
-                        LoggerFactory.get_logger().error(f'Direct mode but target_ip or target_port is empty: ip={target_ip}, port={target_port}')
-                        await self._send_connection_failed(uid, source_rule_name)
-                        return
+                # --- Security Fix: Force use configuration from server rule, ignore client provided target_ip/port ---
+                if 'target_ip' in rule and 'target_port' in rule:
+                    # Direct mode configured on server
+                    use_direct_mode = True
+                    target_ip = rule['target_ip']
+                    target_port = rule['target_port']
+                    target_service = None # Clear potentially misleading data
+                    LoggerFactory.get_logger().info(f'C2C forward request (direct mode enforced): {self.client_name} → {target_client}/{target_ip}:{target_port} (UID: {uid.hex()}, protocol: {protocol})')
+
                     ip_port = f"{target_ip}:{target_port}"
-                    service_name = source_rule_name  # Use rule name as service name
-                    LoggerFactory.get_logger().debug(f'Direct mode: ip_port={ip_port}, service_name={service_name}')
+                    service_name = source_rule_name
                 else:
-                    # Service mode: find target service configuration (backward compatible)
+                    # Service mode
+                    use_direct_mode = False
+                    target_service = rule.get('target_service')
+                    if not target_service:
+                        # Fallback if config is malformed, though validation should prevent this
+                        target_service = rule['name']
+
+                    LoggerFactory.get_logger().info(f'C2C forward request (service mode enforced): {self.client_name} → {target_client}/{target_service} (UID: {uid.hex()}, protocol: {protocol})')
+
                     target_service_config = self._find_service_config(target_handler, target_service)
                     if not target_service_config:
                         LoggerFactory.get_logger().warn(f'Target service does not exist: {target_client}/{target_service}')
@@ -424,9 +449,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                         return
                     ip_port = f"{target_service_config['local_ip']}:{target_service_config['local_port']}"
                     service_name = target_service
-                    LoggerFactory.get_logger().debug(f'Service mode: ip_port={ip_port}, service_name={service_name}')
 
-                # 4. Store routing information (Including ip_port now)
+                # 4. Store routing information
                 async with self.c2c_lock:
                     self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol, ip_port)
 
@@ -481,9 +505,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     )
 
                     LoggerFactory.get_logger().info(f'P2P offers sent to both clients')
-                else:
-                    if protocol == 'tcp' and rule_p2p_enabled:
-                        LoggerFactory.get_logger().info(f'Skipping P2P: Support status: Self={self.p2p_supported}({self.public_port}), Target={target_handler.p2p_supported}({target_handler.public_port})')
+                    # Note: We still send REQUEST_TO_CONNECT as fallback
+                    # If P2P succeeds, clients will use P2P; if fails, they'll use WebSocket relay
 
                 # 5. Forward REQUEST_TO_CONNECT to target client (always send as fallback)
                 message_type = MessageTypeConstant.REQUEST_TO_CONNECT if protocol == 'tcp' else MessageTypeConstant.REQUEST_TO_CONNECT_UDP

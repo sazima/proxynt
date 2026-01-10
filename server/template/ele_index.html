@@ -247,13 +247,13 @@
             <el-form-item label="连接模式" :label-width="formLabelWidth">
                 <el-radio-group v-model="c2cForm.connection_mode" @change="onConnectionModeChange">
                     <el-radio label="service">
-                        服务模式
-                        <el-tooltip content="通过目标客户端的服务名连接（端口会映射到公网）" placement="top">
+                        选择服务
+                        <el-tooltip content="通过目标客户端的已经设置的服务名连接" placement="top">
                             <i class="el-icon-question" style="color: #909399;"></i>
                         </el-tooltip>
                     </el-radio>
                     <el-radio label="direct">
-                        直连模式
+                        直连设置
                         <el-tooltip content="直接指定IP和端口连接（推荐，不暴露公网端口）" placement="top">
                             <i class="el-icon-question" style="color: #909399;"></i>
                         </el-tooltip>
