@@ -70,18 +70,24 @@ class MyWebSocketaHandler(WebSocketHandler):
             self.close(reason=msg)
 
         # Record client's public IP and port for P2P
-        self.public_ip = self.request.remote_ip
+        self.public_ip = self.request.headers.get("X-Real-IP") or self.request.remote_ip
+        # 2. 优先从 Nginx Header 获取 Port (关键修改)
         try:
-            # Get the port from the connection (Note: this is the client's source port, not necessarily the NAT port)
-            if self.request.connection and self.request.connection.stream and self.request.connection.stream.socket:
-                peer_address = self.request.connection.stream.socket.getpeername()
-                self.public_port = peer_address[1]
+            # 先尝试读取 Nginx 传来的 X-Remote-Port
+            nginx_port = self.request.headers.get("X-Remote-Port")
+            if nginx_port:
+                self.public_port = int(nginx_port)
+                # LoggerFactory.get_logger().info(f"Got port from Nginx header: {self.public_port}")
             else:
-                self.public_port = 0
+                # 如果没有 Header，才尝试从 socket 获取 (本地调试模式)
+                if self.request.connection and self.request.connection.stream and self.request.connection.stream.socket:
+                    peer_address = self.request.connection.stream.socket.getpeername()
+                    self.public_port = peer_address[1]
+                else:
+                    self.public_port = 0
         except Exception as e:
             LoggerFactory.get_logger().warning(f'Failed to get client port: {e}')
             self.public_port = 0
-
         LoggerFactory.get_logger().info(f'New WebSocket connection opened from {self.public_ip}:{self.public_port}, compression supported: {self.compress_support}')
 
     async def write_message(self, message, binary=False):
