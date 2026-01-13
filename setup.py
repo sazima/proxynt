@@ -1,3 +1,5 @@
+import sys
+
 from constant.system_constant import SystemConstant
 package_name = SystemConstant.PACKAGE_NAME
 version = SystemConstant.VERSION
@@ -11,7 +13,6 @@ with open("readme_en.md", "r", encoding="utf8") as f:
 readme = readme.replace('./readme.md', 'https://github.com/sazima/proxynt/blob/master/readme.md')
 
 setuptools.setup(
-
     name=package_name,
     version=version,
     package_dir={
@@ -27,9 +28,11 @@ setuptools.setup(
     nt_server = {package_name}.run_server:main
     """,
     packages=l,
+
     install_requires=['tornado',
                       'typing_extensions',
-                      'uvloop; sys_platform != "win32"',  # Linux/macOS 默认安装高性能事件循环
+                      'uvloop; sys_platform != "win32" and python_version >= "3.7"',
+                      'uvloop<0.15; sys_platform != "win32" and python_version < "3.7"',
                       'xxhash>=3.0.0',
                       ],
     extras_require={

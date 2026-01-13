@@ -1,36 +1,49 @@
 """
-UDP Hole Punching Module for P2P Connection
+UDP Hole Punching Module for P2P Connection (Enhanced with N4 Strategy)
 """
 import os
 import socket
+import select
 import threading
 import time
 import traceback
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional, Callable, List
 
 from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
 
 
 class P2PConnection:
-    """Represents a P2P connection"""
-    def __init__(self, uid: bytes, local_socket: socket.socket, remote_addr: tuple):
+    """Represents a P2P connection attempt"""
+    def __init__(self, uid: bytes, remote_ip: str, remote_base_port: int):
         self.uid = uid
-        self.local_socket = local_socket
-        self.remote_addr = remote_addr  # (ip, port)
+        self.remote_ip = remote_ip
+        self.remote_base_port = remote_base_port
+
+        # N4 Strategy: Use multiple sockets
+        self.sockets: List[socket.socket] = []
+
+        # The successfully connected socket and address
+        self.active_socket: Optional[socket.socket] = None
+        self.active_remote_addr: Optional[tuple] = None
+
         self.established = False
         self.last_receive_time = 0
         self.last_send_time = 0
 
 
 class P2PHolePunch:
-    """UDP Hole Punching Manager"""
+    """UDP Hole Punching Manager with Port Prediction"""
 
     def __init__(self):
         self.connections: Dict[bytes, P2PConnection] = {}
         self.lock = threading.Lock()
         self.running = False
         self.receive_thread: Optional[threading.Thread] = None
+
+        # N4 Configuration
+        self.socket_count = 25       # Number of local sockets to bind (Local guessing)
+        self.port_range = 200        # Remote port guessing range (+/- this value)
 
         # Callbacks
         self.on_connection_established: Optional[Callable[[bytes], None]] = None
@@ -45,50 +58,54 @@ class P2PHolePunch:
         self.running = True
         self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
         self.receive_thread.start()
-        LoggerFactory.get_logger().info('P2P hole punching service started')
+        LoggerFactory.get_logger().info('P2P hole punching service started (N4 Strategy Enabled)')
 
     def stop(self):
         """Stop the hole punching service"""
         self.running = False
         with self.lock:
             for uid, conn in list(self.connections.items()):
-                try:
-                    conn.local_socket.close()
-                except Exception:
-                    pass
+                self._close_sockets(conn)
             self.connections.clear()
         LoggerFactory.get_logger().info('P2P hole punching service stopped')
 
-    def initiate_connection(self, uid: bytes, remote_ip: str, remote_port: int, local_port: int = 0) -> bool:
-        """
-        Initiate a P2P connection
+    def _close_sockets(self, connection: P2PConnection):
+        """Close all sockets in a connection"""
+        if connection.sockets:
+            for s in connection.sockets:
+                try:
+                    s.close()
+                except:
+                    pass
+            connection.sockets.clear()
 
-        :param uid: Unique connection ID
-        :param remote_ip: Remote peer's public IP
-        :param remote_port: Remote peer's public port
-        :param local_port: Local port to bind (0 for random)
-        :return: True if initiated successfully
+    def initiate_connection(self, uid: bytes, remote_ip: str, remote_port: int) -> bool:
+        """
+        Initiate a P2P connection using N4 strategy
         """
         try:
-            # Create UDP socket
-            udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            connection = P2PConnection(uid, remote_ip, remote_port)
 
-            # Bind to local port
-            if local_port > 0:
-                udp_socket.bind(('0.0.0.0', local_port))
-            else:
-                udp_socket.bind(('0.0.0.0', 0))  # Let OS assign port
+            # Create a pool of sockets (Brute-force local NAT mapping)
+            for _ in range(self.socket_count):
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-            local_addr = udp_socket.getsockname()
-            LoggerFactory.get_logger().info(f'P2P connection initiated: UID {uid.hex()}, local port: {local_addr[1]}, remote: {remote_ip}:{remote_port}')
+                # N4 Strategy: SO_REUSEADDR / SO_REUSEPORT for better binding
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    if hasattr(socket, "SO_REUSEPORT"):
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except Exception:
+                    pass
 
-            # Create connection object
-            remote_addr = (remote_ip, remote_port)
-            connection = P2PConnection(uid, udp_socket, remote_addr)
+                sock.bind(('0.0.0.0', 0)) # Let OS assign random port
+                sock.setblocking(False)
+                connection.sockets.append(sock)
 
             with self.lock:
                 self.connections[uid] = connection
+
+            LoggerFactory.get_logger().info(f'P2P init: UID {uid.hex()}, created {len(connection.sockets)} sockets, target base: {remote_ip}:{remote_port}')
 
             # Start hole punching process
             self._start_hole_punching(connection)
@@ -101,157 +118,191 @@ class P2PHolePunch:
 
     def _start_hole_punching(self, connection: P2PConnection):
         """
-        Start the hole punching process
-        Send periodic punch packets to remote peer
+        Send punch packets to a range of ports from multiple local sockets
         """
         def punch_loop():
             uid = connection.uid
-            sock = connection.local_socket
-            remote_addr = connection.remote_addr
             retry_count = 0
-            max_retries = SystemConstant.P2P_MAX_RETRY
+            # N4: Aggressive punching for limited time
+            max_retries = 20
 
-            # Punch packet format: "PUNCH:" + UID (to distinguish from data packets)
+            # Punch packet format
             punch_packet = b'PUNCH:' + uid
 
             while self.running and not connection.established and retry_count < max_retries:
                 try:
-                    # Send punch packet
-                    sock.sendto(punch_packet, remote_addr)
-                    connection.last_send_time = time.time()
-                    LoggerFactory.get_logger().debug(f'Sent punch packet to {remote_addr}, attempt {retry_count + 1}/{max_retries}')
+                    # Strategy: Send to remote_base_port +/- offset
+                    # Guessing symmetric NAT port assignment
+                    target_ports = set()
+                    target_ports.add(connection.remote_base_port)
 
-                    # Wait for response
-                    time.sleep(1)
+                    # Add predicted ports
+                    for i in range(1, self.port_range + 1):
+                        target_ports.add(connection.remote_base_port + i)
+                        target_ports.add(connection.remote_base_port - i)
+
+                    # Send from ALL local sockets to ALL predicted remote ports
+                    # This generates socket_count * (2*port_range + 1) packets per round
+                    for sock in connection.sockets:
+                        for port in target_ports:
+                            if port <= 0 or port > 65535:
+                                continue
+                            try:
+                                sock.sendto(punch_packet, (connection.remote_ip, port))
+                            except OSError:
+                                pass # Ignore send errors
+
+                    if retry_count % 5 == 0:
+                        LoggerFactory.get_logger().debug(f'Punching round {retry_count}: Sent burst to {len(target_ports)} ports')
+
+                    time.sleep(0.5) # Wait a bit
                     retry_count += 1
 
-                    # Check if connection established (by receive loop)
                     if connection.established:
-                        LoggerFactory.get_logger().info(f'P2P connection established: UID {uid.hex()}, remote: {remote_addr}')
-                        if self.on_connection_established:
-                            self.on_connection_established(uid)
                         return
 
                 except Exception as e:
-                    LoggerFactory.get_logger().error(f'Error during hole punching: {e}')
+                    LoggerFactory.get_logger().error(f'Error during hole punching loop: {e}')
+                    LoggerFactory.get_logger().error(traceback.format_exc()) # 需要 import traceback
                     break
 
-            # Timeout or failed
             if not connection.established:
-                LoggerFactory.get_logger().warning(f'P2P hole punching failed: UID {uid.hex()}, remote: {remote_addr}')
+                LoggerFactory.get_logger().warning(f'P2P hole punching failed after {retry_count} rounds: UID {uid.hex()}')
                 self.close_connection(uid)
                 if self.on_connection_failed:
                     self.on_connection_failed(uid)
 
-        # Start punch thread
         punch_thread = threading.Thread(target=punch_loop, daemon=True)
         punch_thread.start()
 
     def _receive_loop(self):
-        """Receive loop for all P2P connections"""
+        """
+        Receive loop handling all sockets
+        """
         while self.running:
             try:
-                # Check all connections for incoming data
+                # Gather all sockets from all connections
+                all_sockets = []
+                socket_to_conn_map = {}
+
                 with self.lock:
-                    connections = list(self.connections.values())
+                    for uid, conn in self.connections.items():
+                        if conn.established:
+                            if conn.active_socket:
+                                all_sockets.append(conn.active_socket)
+                                socket_to_conn_map[conn.active_socket] = conn
+                        else:
+                            for s in conn.sockets:
+                                all_sockets.append(s)
+                                socket_to_conn_map[s] = conn
 
-                for conn in connections:
+                if not all_sockets:
+                    time.sleep(0.1)
+                    continue
+
+                # Use select to wait for readable sockets
+                readable, _, _ = select.select(all_sockets, [], [], 0.1)
+
+                for sock in readable:
                     try:
-                        conn.local_socket.settimeout(0.1)  # Non-blocking with short timeout
-                        data, addr = conn.local_socket.recvfrom(65536)
+                        data, addr = sock.recvfrom(65536)
+                        conn = socket_to_conn_map.get(sock)
 
-                        if not data:
+                        if not conn:
                             continue
 
-                        # Check if this is a punch packet
-                        if data.startswith(b'PUNCH:'):
-                            punch_uid = data[6:10]  # Extract UID from punch packet
-                            if punch_uid == conn.uid:
-                                # Received punch packet from remote peer
-                                LoggerFactory.get_logger().info(f'Received punch packet from {addr} for UID {conn.uid.hex()}')
+                        # Logic for established connection
+                        if conn.established:
+                            if addr == conn.active_remote_addr:
+                                if data.startswith(b'PUNCH:'): # Keep-alive / Handshake
+                                    continue
+                                if data.startswith(b'PUNCH_ACK:'):
+                                    continue
 
-                                # Send punch reply
-                                reply_packet = b'PUNCH_ACK:' + conn.uid
-                                conn.local_socket.sendto(reply_packet, addr)
-
-                                # Update remote address (might have changed due to NAT)
-                                conn.remote_addr = addr
-                                conn.established = True
-                                conn.last_receive_time = time.time()
-
-                        elif data.startswith(b'PUNCH_ACK:'):
-                            # Received punch acknowledgment
-                            LoggerFactory.get_logger().info(f'Received punch ACK from {addr} for UID {conn.uid.hex()}')
-                            conn.remote_addr = addr
-                            conn.established = True
-                            conn.last_receive_time = time.time()
-
-                        else:
-                            # Regular data packet
-                            if conn.established:
                                 conn.last_receive_time = time.time()
                                 if self.on_data_received:
                                     self.on_data_received(conn.uid, data)
-                            else:
-                                LoggerFactory.get_logger().warning(f'Received data on unestablished connection: UID {conn.uid.hex()}')
+                            continue
 
-                    except socket.timeout:
-                        continue
+                        # Logic for Handshake (Hole Punching Success)
+                        if data.startswith(b'PUNCH:'):
+                            punch_uid = data[6:10]
+                            if punch_uid == conn.uid:
+                                LoggerFactory.get_logger().info(f'WINNER! P2P Established: UID {conn.uid.hex()}. Route: Local {sock.getsockname()} <-> Remote {addr}')
+
+                                # Send ACK immediately
+                                sock.sendto(b'PUNCH_ACK:' + conn.uid, addr)
+
+                                # Lock onto this socket and address
+                                conn.active_socket = sock
+                                conn.active_remote_addr = addr
+                                conn.established = True
+
+                                # Close other useless sockets to save resources
+                                for s in conn.sockets:
+                                    if s != sock:
+                                        s.close()
+                                conn.sockets = [sock] # Keep only the winner
+
+                                if self.on_connection_established:
+                                    self.on_connection_established(conn.uid)
+
+                        elif data.startswith(b'PUNCH_ACK:'):
+                            # We punched through, and they acknowledged
+                            ack_uid = data[10:14]
+                            if ack_uid == conn.uid:
+                                LoggerFactory.get_logger().info(f'WINNER! Received ACK. P2P Established: UID {conn.uid.hex()}. Route: Local {sock.getsockname()} <-> Remote {addr}')
+                                conn.active_socket = sock
+                                conn.active_remote_addr = addr
+                                conn.established = True
+
+                                # Close others
+                                for s in conn.sockets:
+                                    if s != sock:
+                                        s.close()
+                                conn.sockets = [sock]
+
+                                if self.on_connection_established:
+                                    self.on_connection_established(conn.uid)
+
                     except OSError:
-                        # Socket might be closed
-                        continue
+                        pass
                     except Exception as e:
-                        LoggerFactory.get_logger().error(f'Error in receive loop: {e}')
-
-                # Small sleep to prevent CPU spinning
-                time.sleep(0.01)
+                        LoggerFactory.get_logger().error(f"Error processing packet: {e}")
 
             except Exception as e:
-                LoggerFactory.get_logger().error(f'Fatal error in P2P receive loop: {e}')
-                LoggerFactory.get_logger().error(traceback.format_exc())
+                LoggerFactory.get_logger().error(f'Fatal error in receive loop: {e}')
                 time.sleep(1)
 
     def send_data(self, uid: bytes, data: bytes) -> bool:
-        """
-        Send data over P2P connection
-
-        :param uid: Connection UID
-        :param data: Data to send
-        :return: True if sent successfully
-        """
+        """Send data using the established active socket"""
         with self.lock:
             connection = self.connections.get(uid)
 
-        if not connection:
-            LoggerFactory.get_logger().warning(f'P2P connection not found: UID {uid.hex()}')
-            return False
-
-        if not connection.established:
-            LoggerFactory.get_logger().warning(f'P2P connection not established: UID {uid.hex()}')
+        if not connection or not connection.established or not connection.active_socket:
             return False
 
         try:
-            connection.local_socket.sendto(data, connection.remote_addr)
+            connection.active_socket.sendto(data, connection.active_remote_addr)
             connection.last_send_time = time.time()
             return True
-        except Exception as e:
-            LoggerFactory.get_logger().error(f'Failed to send P2P data: {e}')
+        except Exception:
             return False
 
     def is_established(self, uid: bytes) -> bool:
-        """Check if P2P connection is established"""
         with self.lock:
             connection = self.connections.get(uid)
         return connection is not None and connection.established
 
     def close_connection(self, uid: bytes):
-        """Close a P2P connection"""
         with self.lock:
             connection = self.connections.pop(uid, None)
 
         if connection:
-            try:
-                connection.local_socket.close()
-            except Exception:
-                pass
+            self._close_sockets(connection)
+            if connection.active_socket:
+                try:
+                    connection.active_socket.close()
+                except:
+                    pass
             LoggerFactory.get_logger().info(f'P2P connection closed: UID {uid.hex()}')

@@ -285,24 +285,26 @@ class WebsocketClient:
             LoggerFactory.get_logger().error('P2P module not initialized, ignoring P2P_OFFER')
             return
 
-        # Convert uid from hex string to bytes
         uid_hex = data['uid']
         uid = bytes.fromhex(uid_hex)
-        role = data['role']  # 'initiator' or 'responder'
+        role = data['role']
         peer_client = data['peer_client']
         peer_public_ip = data['peer_public_ip']
-        peer_public_port = data['peer_public_port']
-        service_name = data['service_name']
-        ip_port = data['ip_port']
 
-        LoggerFactory.get_logger().info(f'Received P2P_OFFER: role={role}, peer={peer_client}, peer_addr={peer_public_ip}:{peer_public_port}')
+        # --- 调试日志：检查收到的原始数据 ---
+        raw_port = data.get('peer_public_port')
+        LoggerFactory.get_logger().info(f"[Debug] Raw peer port: {raw_port}, type: {type(raw_port)}")
 
-        if peer_public_port <= 0:
-            LoggerFactory.get_logger().warning(f'Invalid peer public port {peer_public_port}, skipping P2P attempt.')
-            # Directly trigger failure callback to clean up or notify server if needed,
-            # but usually server will rely on request_to_connect for fallback.
+        # 【关键修复】确保转换为 int
+        try:
+            peer_public_port = int(raw_port)
+        except (ValueError, TypeError):
+            LoggerFactory.get_logger().error(f'Invalid peer port received: {raw_port}')
             self._send_p2p_failed(uid)
             return
+
+        service_name = data['service_name']
+        ip_port = data['ip_port']
 
         # Store connection info
         self.p2p_connections[uid] = {
@@ -314,12 +316,12 @@ class WebsocketClient:
             'peer_public_port': peer_public_port
         }
 
-        # Initiate P2P connection
+        # Initiate
         success = self.p2p_hole_punch.initiate_connection(uid, peer_public_ip, peer_public_port)
         if not success:
-            LoggerFactory.get_logger().error(f'Failed to initiate P2P connection for UID {uid.hex()}')
-            # Notify server about failure (will use WebSocket fallback)
             self._send_p2p_failed(uid)
+
+
 
     def _on_p2p_established(self, uid: bytes):
         """Callback when P2P connection is established"""
