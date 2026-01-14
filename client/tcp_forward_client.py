@@ -146,6 +146,12 @@ class TcpForwardClient:
         # N4 Tunnel Manager for P2P data transfer
         self.tunnel_manager = None
 
+        # Pending data buffer: uid -> list of (data, timestamp)
+        # Used to buffer P2P data that arrives before connection is established
+        self.pending_data: Dict[bytes, list] = {}
+        self.pending_data_lock = Lock()
+        self.pending_data_timeout = 10  # seconds to keep pending data
+
     def set_running(self, running: bool):
         self.socket_event_loop.is_running = running
 
@@ -398,6 +404,10 @@ class TcpForwardClient:
                 self.socket_event_loop.register(s, ResisterAppendData(self.handle_message, speed_limiter))
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'register socket success {name}, {uid}')
+
+                # Process any pending data that arrived before connection was established
+                self._flush_pending_data(uid, s)
+
                 return True
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
@@ -483,6 +493,17 @@ class TcpForwardClient:
     def send_by_uid(self, uid: bytes, msg: bytes):
         connection = self.uid_to_socket_connection.get(uid)
         if not connection:
+            # Connection not established yet, buffer the data
+            # This handles the race condition where P2P data arrives before
+            # the REQUEST_TO_CONNECT message establishes the connection
+            if msg:  # Only buffer non-empty data
+                with self.pending_data_lock:
+                    if uid not in self.pending_data:
+                        self.pending_data[uid] = []
+                    self.pending_data[uid].append((msg, time.time()))
+                    LoggerFactory.get_logger().debug(
+                        f'Buffered {len(msg)} bytes for UID {uid.hex()} (connection pending)'
+                    )
             return
         try:
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
@@ -497,3 +518,39 @@ class TcpForwardClient:
             LoggerFactory.get_logger().error(traceback.format_exc())
             # After error, send empty message, server will close connection
             self.close_remote_socket(connection)
+
+    def _flush_pending_data(self, uid: bytes, sock: socket.socket):
+        """
+        Flush any pending data that was buffered before connection was established.
+        This solves the race condition where P2P data arrives before REQUEST_TO_CONNECT.
+        """
+        pending_items = None
+        with self.pending_data_lock:
+            if uid in self.pending_data:
+                pending_items = self.pending_data.pop(uid)
+
+        if not pending_items:
+            return
+
+        now = time.time()
+        total_sent = 0
+        expired_count = 0
+
+        for data, timestamp in pending_items:
+            # Skip expired data
+            if now - timestamp > self.pending_data_timeout:
+                expired_count += 1
+                continue
+
+            try:
+                sock.sendall(data)
+                total_sent += len(data)
+            except Exception as e:
+                LoggerFactory.get_logger().error(f'Failed to flush pending data for UID {uid.hex()}: {e}')
+                break
+
+        if total_sent > 0 or expired_count > 0:
+            LoggerFactory.get_logger().info(
+                f'Flushed pending data for UID {uid.hex()}: '
+                f'{total_sent} bytes sent, {expired_count} expired packets dropped'
+            )

@@ -79,7 +79,8 @@ class N4Tunnel:
         self.kcp.stream = True
         self.kcp.nodelay(1, 10, 2, 1)
         self.kcp.wndsize(128, 128)
-        self.kcp.setmtu(1350)
+        # self.kcp.setmtu(1350)
+        self.kcp.setmtu(1200)
 
         # [新增] 这里必须加上这个 buffer！
         self.stream_buffer = bytearray()
@@ -543,9 +544,16 @@ class N4TunnelManager:
 
         # 3. KCP 输入处理 (带粘包/拆包修复)
         if hasattr(tunnel, 'kcp'):
+            # Collect complete packets while holding the lock
+            complete_packets = []
+
             with tunnel.lock:
                 # [Input] 将 UDP 原始数据喂给 KCP
-                tunnel.kcp.input(data)
+                try:
+                    tunnel.kcp.input(data)
+                except Exception as e:
+                    LoggerFactory.get_logger().warning(f'invalid kcp data: {e}')
+                    return
 
                 # [Recv] 从 KCP 获取所有可用的流数据，全部追加到 buffer
                 while True:
@@ -564,22 +572,25 @@ class N4TunnelManager:
                     # length 是最后两个字节 (大端序 !H)
                     # 这里的索引 6 和 7 对应 length 字段
                     payload_len = (tunnel.stream_buffer[6] << 8) | tunnel.stream_buffer[7]
+                    if payload_len > 10 * 1024 * 1024:
+                        LoggerFactory.get_logger().error(f"异常包长度 {payload_len}，流已错位，重置缓冲区")
+                        tunnel.stream_buffer.clear()
+                        break
 
                     total_pkt_len = HEADER_SIZE + payload_len
 
-                    # 2. 检查 buffer 里是否有足够的数据包
                     if len(tunnel.stream_buffer) >= total_pkt_len:
-                        # 3. 切割出一个完整的包
                         complete_packet = bytes(tunnel.stream_buffer[:total_pkt_len])
-
-                        # 4. 从 buffer 中移除这个包
                         del tunnel.stream_buffer[:total_pkt_len]
-
-                        # 5. 处理这个完整的包
-                        self._process_tunnel_payload(tunnel, sock, complete_packet, addr)
+                        # Collect packet, process outside lock to avoid blocking
+                        complete_packets.append(complete_packet)
                     else:
                         # 数据不够一个完整包，等待下次 KCP 数据到来
                         break
+
+            # Process packets outside the lock to prevent blocking concurrent sends
+            for packet in complete_packets:
+                self._process_tunnel_payload(tunnel, sock, packet, addr)
 
     def _process_tunnel_payload(self, tunnel, sock, data, addr):
         """解析 TunnelPacket (原有的业务逻辑)"""
@@ -594,6 +605,13 @@ class N4TunnelManager:
         tunnel.last_activity = time.time()
 
         if pkt_type == TunnelPacket.TYPE_DATA:
+            # Auto-register UID to this tunnel's peer for bidirectional communication
+            # This allows responses to be sent back via the same P2P tunnel
+            if uid not in self.uid_to_peer:
+                self.register_uid(uid, tunnel.peer_name)
+                LoggerFactory.get_logger().debug(
+                    f'Auto-registered UID {uid.hex()} to peer {tunnel.peer_name}'
+                )
             if self.on_data_received:
                 self.on_data_received(uid, payload)
 
