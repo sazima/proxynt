@@ -162,6 +162,7 @@ class WebsocketClient:
         # Callback for receiving P2P data (Tunnel -> Local)
         self.tunnel_manager.on_data_received = self._on_p2p_data_received
         self.tunnel_manager.on_tunnel_closed = self._on_tunnel_closed
+        self.tunnel_manager.on_punch_failed = self._on_punch_failed
 
         self.tunnel_manager.start()
 
@@ -328,6 +329,12 @@ class WebsocketClient:
     def _on_tunnel_closed(self, peer_name: str):
         """Callback when tunnel is closed"""
         LoggerFactory.get_logger().info(f"Tunnel to {peer_name} closed")
+
+    def _on_punch_failed(self, peer_name: str):
+        """Callback when punch fails (timeout) - data will fall back to WebSocket"""
+        LoggerFactory.get_logger().warning(
+            f"Punch to {peer_name} failed (timeout), falling back to WebSocket"
+        )
 
     def request_p2p_tunnel(self, target_client: str, uid: bytes):
         """

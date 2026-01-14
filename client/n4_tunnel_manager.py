@@ -61,6 +61,13 @@ class N4Tunnel:
         self.status: str = 'idle'
         self.last_activity: float = time.time()
 
+        # Health check state
+        self.last_keepalive_sent: float = 0  # Time when last keepalive was sent
+        self.keepalive_pending: bool = False  # Waiting for keepalive response
+        self.keepalive_failures: int = 0  # Consecutive keepalive failures
+        self.max_keepalive_failures: int = 2  # Max failures before marking dead
+        self.punch_start_time: float = 0  # Time when punching started
+
         # N4 hole punching configuration
         self.src_port_start: int = 30000
         self.src_port_count: int = 25
@@ -177,6 +184,10 @@ class N4TunnelManager:
         # Callbacks
         self.on_data_received: Optional[Callable[[bytes, bytes], None]] = None
         self.on_tunnel_closed: Optional[Callable[[str], None]] = None
+        self.on_punch_failed: Optional[Callable[[str], None]] = None  # Called when punch times out
+
+        # Punch timeout (seconds) - if punching takes longer, fall back to WebSocket
+        self.punch_timeout: float = 10.0
 
         # WebSocket client reference (for sending messages)
         self.ws_client = None
@@ -268,6 +279,34 @@ class N4TunnelManager:
         tunnel = self.get_tunnel(peer_name)
         return tunnel is not None and tunnel.is_established()
 
+    def is_tunnel_failed(self, peer_name: str) -> bool:
+        """Check if tunnel to peer has failed (should use WebSocket instead)"""
+        pair_key = get_pair_key(self.local_client_name, peer_name)
+        with self.lock:
+            tunnel = self.tunnels.get(pair_key)
+            if tunnel:
+                return tunnel.status == 'failed'
+        return False
+
+    def is_tunnel_punching(self, peer_name: str) -> bool:
+        """Check if tunnel to peer is currently punching"""
+        pair_key = get_pair_key(self.local_client_name, peer_name)
+        with self.lock:
+            tunnel = self.tunnels.get(pair_key)
+            if tunnel:
+                return tunnel.status == 'punching'
+        return False
+
+    def clear_failed_tunnel(self, peer_name: str):
+        """Clear a failed tunnel so it can be retried later"""
+        pair_key = get_pair_key(self.local_client_name, peer_name)
+        with self.lock:
+            tunnel = self.tunnels.get(pair_key)
+            if tunnel and tunnel.status == 'failed':
+                tunnel.close()
+                self.tunnels.pop(pair_key, None)
+                LoggerFactory.get_logger().info(f"Cleared failed tunnel to {peer_name}")
+
     def register_uid(self, uid: bytes, peer_name: str):
         """Register a UID to use a tunnel (for multiplexing)"""
         with self.lock:
@@ -300,6 +339,7 @@ class N4TunnelManager:
             tunnel = N4Tunnel(pair_key, self.local_client_name, peer_name)
             tunnel.session_id = session_id
             tunnel.status = 'punching'
+            tunnel.punch_start_time = time.time()  # Track when punching started
 
             # Create socket pool
             self._create_socket_pool(tunnel)
@@ -338,25 +378,70 @@ class N4TunnelManager:
             daemon=True
         ).start()
 
+    # ... 在 N4TunnelManager 类中 ...
+
     def send_data(self, uid: bytes, data: bytes) -> bool:
         """
         Send data via tunnel.
-        Returns False if tunnel not ready.
+        Returns False if tunnel not ready or failed.
         """
         peer_name = self.uid_to_peer.get(uid)
         if not peer_name:
             return False
 
-        tunnel = self.get_tunnel(peer_name)
+        pair_key = get_pair_key(self.local_client_name, peer_name)
+        with self.lock:
+            tunnel = self.tunnels.get(pair_key)
+
         if not tunnel:
             return False
 
-        # --- 修改回滚 ---
-        # 不需要手动 fragment_data，因为 KCP 会处理 MTU 分片
-        # 直接封装整个数据包交给 KCP 即可
-        packet = TunnelPacket.pack_data(uid, data)
+        if tunnel.status == 'failed':
+            return False
 
-        return tunnel.send(packet)
+        if tunnel.status == 'punching':
+            elapsed = time.time() - tunnel.punch_start_time
+            if elapsed > self.punch_timeout:
+                tunnel.status = 'failed'
+                return False
+            return False
+
+        if not tunnel.is_established():
+            return False
+
+        # === 修改核心逻辑：强制应用层分片 ===
+        # TunnelPacket 的 Header 中 length 字段是 unsigned short (max 65535)
+        # 为了传输稳定性，我们将其切分为 MTU 安全的大小 (例如 1300-1400 字节)
+        # 这样 KCP 不需要处理过大的 Frame，且能避免 struct.pack 溢出
+
+        MAX_CHUNK_SIZE = 1350  # 留出 50 字节给 UDP头 + KCP头 + TunnelHeader
+
+        if len(data) <= MAX_CHUNK_SIZE:
+            # 数据较小，直接发送
+            packet = TunnelPacket.pack_data(uid, data)
+            return tunnel.send(packet)
+        else:
+            # 数据较大，切片发送
+            # SSH 协议是流式的，我们只要按顺序把字节塞进去，接收端拼起来就行
+            offset = 0
+            total_len = len(data)
+            success = True
+
+            while offset < total_len:
+                end = offset + MAX_CHUNK_SIZE
+                chunk = data[offset:end]
+
+                # 封装包
+                packet = TunnelPacket.pack_data(uid, chunk)
+
+                # 发送
+                if not tunnel.send(packet):
+                    success = False
+                    break
+
+                offset = end
+
+            return success
 
     def close_uid(self, uid: bytes):
         """Close a specific UID stream (but keep tunnel alive)"""
@@ -625,6 +710,14 @@ class N4TunnelManager:
             except:
                 pass
 
+        elif pkt_type == TunnelPacket.TYPE_KEEPALIVE_ACK:
+            # Received keepalive response, tunnel is healthy
+            tunnel.keepalive_pending = False
+            tunnel.keepalive_failures = 0  # Reset failure count
+            LoggerFactory.get_logger().debug(
+                f"Received keepalive ACK from {tunnel.peer_name}"
+            )
+
         elif pkt_type == TunnelPacket.TYPE_TUNNEL_CLOSE:
             self.close_tunnel(tunnel.peer_name, notify_peer=False)
 
@@ -678,7 +771,7 @@ class N4TunnelManager:
     def _monitor_loop(self):
         """Background monitor for tunnel health and idle timeout"""
         while self.running:
-            time.sleep(10)
+            time.sleep(5)  # Check more frequently for better responsiveness
 
             try:
                 now = time.time()
@@ -687,19 +780,59 @@ class N4TunnelManager:
                     tunnels_to_check = list(self.tunnels.values())
 
                 for tunnel in tunnels_to_check:
+                    # Check punching timeout
+                    if tunnel.status == 'punching':
+                        punch_elapsed = now - tunnel.punch_start_time
+                        if punch_elapsed > self.punch_timeout:
+                            LoggerFactory.get_logger().warning(
+                                f"Punch timeout for {tunnel.peer_name} after {punch_elapsed:.1f}s"
+                            )
+                            # Mark as failed, don't close - let it be cleaned up
+                            tunnel.status = 'failed'
+                            if self.on_punch_failed:
+                                self.on_punch_failed(tunnel.peer_name)
+                        continue
+
+                    # Clean up failed tunnels after 60s so they can be retried
+                    if tunnel.status == 'failed':
+                        failed_time = now - tunnel.punch_start_time
+                        if failed_time > 60:
+                            self.clear_failed_tunnel(tunnel.peer_name)
+                        continue
+
                     if not tunnel.is_established():
                         continue
 
                     idle_time = now - tunnel.last_activity
 
-                    # Send keepalive at 30s
-                    if 30 < idle_time < 35:
+                    # Check keepalive response timeout
+                    if tunnel.keepalive_pending:
+                        keepalive_wait = now - tunnel.last_keepalive_sent
+                        if keepalive_wait > 5:  # 10s timeout for keepalive response
+                            tunnel.keepalive_failures += 1
+                            tunnel.keepalive_pending = False
+                            LoggerFactory.get_logger().warning(
+                                f"Keepalive timeout for {tunnel.peer_name}, "
+                                f"failures: {tunnel.keepalive_failures}/{tunnel.max_keepalive_failures}"
+                            )
+
+                            if tunnel.keepalive_failures >= tunnel.max_keepalive_failures:
+                                LoggerFactory.get_logger().error(
+                                    f"Tunnel to {tunnel.peer_name} is dead (keepalive failed)"
+                                )
+                                self.close_tunnel(tunnel.peer_name, notify_peer=True)
+                                continue
+
+                    # Send keepalive every 15s of idle time
+                    if idle_time > 10 and not tunnel.keepalive_pending:
                         tunnel.send_keepalive()
+                        tunnel.last_keepalive_sent = now
+                        tunnel.keepalive_pending = True
                         LoggerFactory.get_logger().debug(
                             f"Sent keepalive to {tunnel.peer_name}"
                         )
 
-                    # Close at 60s idle
+                    # Hard timeout at 60s idle (no activity at all)
                     if idle_time > 60:
                         LoggerFactory.get_logger().info(
                             f"Tunnel to {tunnel.peer_name} idle timeout"
