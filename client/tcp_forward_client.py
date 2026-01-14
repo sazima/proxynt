@@ -143,7 +143,8 @@ class TcpForwardClient:
         self.c2c_listeners: Dict[str, socket.socket] = {}   # rule_name → listener socket
         self.c2c_uid_to_rule: Dict[bytes, str] = {}         # UID → rule_name
 
-        self.p2p_client = None
+        # N4 Tunnel Manager for P2P data transfer
+        self.tunnel_manager = None
 
     def set_running(self, running: bool):
         self.socket_event_loop.is_running = running
@@ -240,6 +241,11 @@ class TcpForwardClient:
                     self.uid_to_socket_connection[uid] = connection
                     self.socket_to_socket_connection[client_socket] = connection
 
+                # Register UID to tunnel_manager for P2P routing
+                if self.tunnel_manager:
+                    self.tunnel_manager.register_uid(uid, target_client)
+                    LoggerFactory.get_logger().info(f'Registered UID {uid.hex()} to peer {target_client}')
+
                 # Send CLIENT_TO_CLIENT_FORWARD message to server
                 forward_data = {
                     'uid': uid,
@@ -291,13 +297,15 @@ class TcpForwardClient:
             LoggerFactory.get_logger().error(f'{traceback.format_exc()}')
             LoggerFactory.get_logger().warn(f'get os error: {str(e)}, close')
             recv = b''
-        if self.p2p_client and self.p2p_client.send_data(connection.uid, recv):
+        # Try to send via P2P tunnel if available
+        if self.tunnel_manager and self.tunnel_manager.send_data(connection.uid, recv):
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug(f'Sent {len(recv)} bytes via P2P (UID: {connection.uid.hex()})')
+                LoggerFactory.get_logger().debug(f'Sent {len(recv)} bytes via P2P tunnel (UID: {connection.uid.hex()})')
 
-            # 如果收到空数据(recv为空)，说明本地连接关闭，需要同步关闭连接
+            # If recv is empty, local connection closed, need to sync close
             if not recv:
                 try:
+                    self.tunnel_manager.close_uid(connection.uid)
                     self.close_connection(each)
                 except Exception:
                     pass

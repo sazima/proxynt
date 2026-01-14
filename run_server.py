@@ -31,7 +31,7 @@ from server.admin_http_handler import AdminHtmlHandler, AdminHttpApiHandler, Sho
 from server.task.heart_beat_task import HeartBeatTask
 from server.tcp_forward_client import TcpForwardClient
 from server.websocket_handler import MyWebSocketaHandler
-from server.p2p_exchange_service import P2PExchangeService
+from server.n4_signal_service import N4SignalService
 tornado.ioloop.IOLoop.configure(tornado.ioloop.IOLoop.configured_class(), time_func=time.monotonic)
 
 DEFAULT_CONFIG = './config_s.json'
@@ -157,12 +157,13 @@ def main():
     app.listen(ContextUtils.get_port(), chunk_size=65536 * 2)
     LoggerFactory.get_logger().info(f'start server at port {ContextUtils.get_port()}, websocket_path: {websocket_path}, admin_path: {admin_html_path}')
 
-    # Start P2P Exchange Service (for UDP hole punching)
-    p2p_exchange_port = server_config.get('p2p_exchange_port', 19999)
-    p2p_exchange_service = P2PExchangeService.get_instance(p2p_exchange_port)
+    # Start N4 Signal Service (for P2P hole punching coordination)
+    n4_signal_port = server_config.get('p2p_signal_port', 19999)
+    n4_signal_service = N4SignalService.get_instance(n4_signal_port)
     # Set tornado loop reference for thread-safe callbacks
-    p2p_exchange_service.set_tornado_loop(tornado.ioloop.IOLoop.current())
-    p2p_exchange_service.start()
+    n4_signal_service.set_tornado_loop(tornado.ioloop.IOLoop.current())
+    n4_signal_service.start()
+    ContextUtils.set_n4_signal_service(n4_signal_service)
 
     # create interval task
     heart_beat_task = HeartBeatTask(asyncio.get_event_loop(), SystemConstant.HEART_BEAT_INTERVAL)

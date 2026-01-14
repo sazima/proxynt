@@ -21,6 +21,7 @@ class ContextUtils:
 
     _server_config = '_server_config'  # 服务端配置
     _heart_beat_task = '_heart_beat_task'  # 心跳任务实例（用于智能心跳）
+    _n4_signal_service = '_n4_signal_service'  # N4信令服务实例
 
     @classmethod
     def get_password(cls) -> str:
@@ -125,3 +126,13 @@ class ContextUtils:
         """获取客户端到客户端转发规则"""
         server_config = cls.get_server_config()
         return server_config.get('client_to_client_rules', [])
+
+    @classmethod
+    def get_n4_signal_service(cls):
+        """获取N4信令服务实例"""
+        return c.get(cls._n4_signal_service)
+
+    @classmethod
+    def set_n4_signal_service(cls, service):
+        """设置N4信令服务实例"""
+        c[cls._n4_signal_service] = service

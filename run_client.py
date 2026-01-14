@@ -34,10 +34,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from common.speed_limit import SpeedLimiter
 from common.websocket import WebSocketException, ABNF
+from common.n4_protocol import N4Packet
 from client.udp_forward_client import UdpForwardClient
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
-from client.p2p_hole_punch import P2PHolePunch
+from client.n4_tunnel_manager import N4TunnelManager, get_pair_key
 from common import websocket
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
@@ -68,13 +69,13 @@ NAME_TO_LEVEL = {
 
 OPEN_CLOSE_LOCK = threading.Lock()
 name_to_speed_limiter: Dict[str, SpeedLimiter] = {}
-SERVER_P2P_SIGNAL_PORT = 19999  # 服务端监听的 UDP 信令端口
+SERVER_P2P_SIGNAL_PORT = 19999  # N4 Signal Service UDP port
 
 
 def get_config() -> ClientConfigEntity:
-    parser = OptionParser(usage="""usage: %prog -c config_c.json 
-    
-config_c.json example: 
+    parser = OptionParser(usage="""usage: %prog -c config_c.json
+
+config_c.json example:
 {
   "server": {
     "url": "ws://192.168.9.224:18888/websocket_path",
@@ -140,87 +141,32 @@ class WebsocketClient:
         self.public_ip: str = None
         self.public_port: int = None
 
-        # Initialize P2P module
-        self.p2p_hole_punch = P2PHolePunch()
-        # 将 P2P 模块引用注入到 TcpForwardClient，实现数据发送时的路由选择
-        self.forward_client.p2p_client = self.p2p_hole_punch
-        # 将 WS 客户端引用注入到 P2PHolePunch，实现断线重连信令发送
-        self.p2p_hole_punch.set_ws_client(self)
-        self.forward_client.p2p_client = self.p2p_hole_punch
+        # Get server info for N4 signaling
+        server_url = config_data['server']['url']
+        parsed = urlparse(server_url)
+        server_host = parsed.hostname
+        signal_port = config_data.get('p2p_signal_port', SERVER_P2P_SIGNAL_PORT)
+        client_name = config_data['client_name']
+
+        # Initialize N4 Tunnel Manager
+        self.tunnel_manager = N4TunnelManager(
+            local_client_name=client_name,
+            server_host=server_host,
+            server_port=signal_port
+        )
+        self.tunnel_manager.set_ws_client(self)
+
+        # Inject tunnel manager to TCP forward client for data routing
+        self.forward_client.tunnel_manager = self.tunnel_manager
 
         # Callback for receiving P2P data (Tunnel -> Local)
-        self.p2p_hole_punch.on_data_received = self._on_p2p_data_received
+        self.tunnel_manager.on_data_received = self._on_p2p_data_received
+        self.tunnel_manager.on_tunnel_closed = self._on_tunnel_closed
 
-        self.p2p_hole_punch.start()
+        self.tunnel_manager.start()
 
-        # P2P pending offers (waiting for PEER_INFO)
-        # uid_hex -> offer_data
-        self.pending_p2p_offers: Dict[str, dict] = {}
-
-        # Track if we've sent EXCHANGE (only send once per session)
-        self.exchange_sent = False
-        self.exchange_lock = threading.Lock()
-
-        # 启动 UDP 地址刷新线程
-        self._udp_refresh_running = True
-        self._start_udp_refresh()
-
-    def _start_udp_refresh(self):
-        """
-        定期向服务器 UDP 端口发送心跳，确保 NAT 映射不过期，
-        并让服务器获知准确的 UDP 公网端口。
-        """
-        parsed_url = urlparse(self.ws.url)
-        server_host = parsed_url.hostname
-        # server_host = self.config_data['server']['host']
-        # 优先使用配置的端口，或者默认端口 19999
-        server_port = SERVER_P2P_SIGNAL_PORT
-        client_name = self.config_data['client_name']
-
-        def refresh_loop():
-            # 这里创建一个持久的 socket 用于保活
-            # 注意：理想情况下 P2P 打洞应复用此 Socket，但目前架构下暂独立
-            # 这里的目的是让服务器知道 "Client Name -> Public IP:Port" 的映射
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-            LoggerFactory.get_logger().info(f"Starting UDP address refresh to {server_host}:{server_port}")
-
-            while self._udp_refresh_running:
-                try:
-                    # 协议格式：P2P_PING:客户端名
-                    msg = f'P2P_PING:{client_name}'.encode('utf-8')
-                    sock.sendto(msg, (server_host, server_port))
-                except Exception as e:
-                    # LoggerFactory.get_logger().debug(f"UDP refresh failed: {e}")
-                    pass
-                time.sleep(15) # 15秒一次心跳
-
-            try:
-                sock.close()
-            except:
-                pass
-
-        t = threading.Thread(target=refresh_loop, daemon=True)
-        t.start()
-
-    def send_p2p_pre_connect(self, target_client_name):
-        """发送 P2P 预连接请求"""
-        if not target_client_name: return
-        try:
-            # 需要在 MessageTypeConstant 中定义 P2P_PRE_CONNECT = 'p2p_pre_connect'
-            msg_type = getattr(MessageTypeConstant, 'P2P_PRE_CONNECT', 'p2p_pre_connect')
-
-            msg: MessageEntity = {
-                'type_': msg_type,
-                'data': {
-                    'target_client': target_client_name
-                }
-            }
-            if self.ws.sock and self.ws.sock.connected:
-                self.ws.send(NatSerialization.dumps(msg, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
-                LoggerFactory.get_logger().info(f"Sent P2P pre-connect request for target: {target_client_name}")
-        except Exception as e:
-            LoggerFactory.get_logger().error(f"Failed to send pre-connect: {e}")
+        # Pending punch sessions: session_id_hex -> {peer_name, ...}
+        self.pending_sessions: Dict[str, dict] = {}
 
     def on_message(self, ws, message: bytes):
         try:
@@ -236,11 +182,6 @@ class WebsocketClient:
                 name = data['name']
                 b = data['data']
 
-                # 注册 Session 关联 (P2P 模块需要知道这个 UID 属于哪个服务/对端)
-                # 注意：这里我们假设 socket name 包含了对端信息，或者通过其他方式关联
-                # 在 Multiplexing 模式下，接收端不需要在这里 initiate_connection，
-                # 因为隧道建立是独立的。这里只需要处理数据。
-
                 create_result = self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
                 if create_result:
                     self.forward_client.send_by_uid(uid, b)
@@ -251,9 +192,11 @@ class WebsocketClient:
                 uid = data['uid']
                 name = data['name']
 
-                # 注册 P2P Session (虽然是被动连接，但如果 P2P 通了，回包也要走 P2P)
-                # 这里暂时无法直接得知 Peer Name，除非协议里带了。
-                # 目前逻辑是：发送端决定走 P2P，接收端收到 P2P 数据包后自动响应。
+                # Register UID to tunnel_manager for P2P routing (if source_client provided)
+                source_client = data.get('source_client')
+                if source_client and self.tunnel_manager:
+                    self.tunnel_manager.register_uid(uid, source_client)
+                    LoggerFactory.get_logger().info(f'Registered UID {uid.hex()} to peer {source_client}')
 
                 self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
 
@@ -293,202 +236,141 @@ class WebsocketClient:
                     self.forward_client.setup_c2c_tcp_listeners(c2c_rules)
                     self.udp_forward_client.setup_c2c_udp_listeners(c2c_rules)
 
-                    # 【核心】启动后延迟触发 P2P 预连接
-                    # 延迟是为了确保 UDP Refresh 包已经到达服务器，服务器有了最新的 UDP 端口
-                    threading.Timer(3.0, self._trigger_initial_p2p, args=(c2c_rules,)).start()
-
-            # Handle P2P OFFER
-            elif msg_type == MessageTypeConstant.P2P_OFFER:
-                self._handle_p2p_offer(message_data['data'])
+            # Handle P2P punch request from server
+            elif msg_type == MessageTypeConstant.P2P_PUNCH_REQUEST:
+                self._handle_punch_request(message_data['data'])
 
             # Handle P2P PEER_INFO (contains peer's actual UDP port from EXCHANGE)
             elif msg_type == MessageTypeConstant.P2P_PEER_INFO:
                 self._handle_p2p_peer_info(message_data['data'])
 
-            # Handle P2P Handshake Signals (Success/Failed) from Peer
-            # 在 Multiplexing 模式下，握手在 p2p_hole_punch 内部闭环，这里主要是打日志
-            elif msg_type == MessageTypeConstant.P2P_SUCCESS:
-                LoggerFactory.get_logger().info(f"P2P Success signal received for {message_data.get('data', {}).get('uid')}")
-            elif msg_type == MessageTypeConstant.P2P_FAILED:
-                LoggerFactory.get_logger().warn(f"P2P Failed signal received for {message_data.get('data', {}).get('uid')}")
-
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
-    def _trigger_initial_p2p(self, rules):
-        """遍历规则，对启用了 P2P 的目标发起预连接"""
-        target_clients = set()
-        for rule in rules:
-            # 只处理自己作为源端的规则
-            if rule.get('p2p_enabled', True) and rule.get('target_client'):
-                target_clients.add(rule['target_client'])
+    def _handle_punch_request(self, data: dict):
+        """Handle P2P_PUNCH_REQUEST from server - start EXCHANGE phase"""
+        session_id_hex = data['session_id']
+        peer_name = data['peer_name']
 
-        for target in target_clients:
-            self.send_p2p_pre_connect(target)
+        LoggerFactory.get_logger().info(
+            f'Received P2P_PUNCH_REQUEST: peer={peer_name}, session={session_id_hex}'
+        )
 
-    def _handle_p2p_offer(self, data: dict):
-        """Handle P2P OFFER message from server"""
-        if not self.p2p_hole_punch:
+        # Check if tunnel already exists
+        if self.tunnel_manager.is_tunnel_established(peer_name):
+            LoggerFactory.get_logger().info(f"Tunnel to {peer_name} already exists, skipping punch")
             return
 
-        LoggerFactory.get_logger().info(f'[DEBUG] Received P2P_OFFER: {data}')
+        # Store pending session
+        self.pending_sessions[session_id_hex] = {
+            'peer_name': peer_name,
+            'timestamp': time.time()
+        }
 
-        # Hex to bytes
-        uid_hex = data['uid']
+        # Prepare socket pool and send EXCHANGE
+        session_id = bytes.fromhex(session_id_hex)
+        exchange_sock = self.tunnel_manager.prepare_punch(peer_name, session_id)
+
+        if exchange_sock:
+            self._send_exchange_packet(exchange_sock, session_id)
+
+    def _send_exchange_packet(self, sock: socket.socket, session_id: bytes):
+        """Send N4 EXCHANGE packet to server"""
         try:
-            uid = bytes.fromhex(uid_hex)
-        except:
-            uid = uid_hex.encode() # Fallback
-
-        role = data['role']
-        peer_client = data['peer_client']
-
-        if self.p2p_hole_punch.is_tunnel_active(peer_client):
-            LoggerFactory.get_logger().info(f"⚡ Tunnel to {peer_client} exists. Multiplexing UID {uid_hex} over existing tunnel.")
-            # 仅仅注册 UID 映射关系即可
-            self.p2p_hole_punch.register_session(uid, peer_client)
-            if role == 'responder':
-                service_name = data.get('service_name', 'unknown')
-                ip_port = data.get('ip_port') # 例如 "127.0.0.1:22"
-
-                if ip_port:
-                    LoggerFactory.get_logger().info(f"Multiplexing: Connecting to local target {ip_port} for UID {uid_hex}")
-                    # 主动建立到本地服务的 TCP 连接
-                    self.forward_client.create_socket(
-                        service_name,
-                        uid,
-                        ip_port,
-                        name_to_speed_limiter.get(service_name)
-                    )
-
-            return # 复用流程结束
-
-        # Check if this is new EXCHANGE-based flow
-        need_exchange = data.get('need_exchange', False)
-
-        LoggerFactory.get_logger().info(f'[DEBUG] need_exchange={need_exchange}, has peer_public_ip={("peer_public_ip" in data)}')
-
-        if need_exchange:
-            # New flow: Send EXCHANGE first, then wait for PEER_INFO
-            LoggerFactory.get_logger().info(f'P2P Offer received (EXCHANGE mode): Peer={peer_client}, Role={role}')
-
-            # Save this offer for later processing (when we receive PEER_INFO)
-            self.pending_p2p_offers[uid_hex] = data
-
-            # Send EXCHANGE packet to server to establish UDP NAT mapping
-            # CRITICAL: Must send from actual punching socket, not temp socket!
-            self._send_exchange_packet(peer_client)
-        else:
-            # Legacy flow: Direct punching (for backward compatibility)
-            peer_public_ip = data.get('peer_public_ip')
-            try:
-                peer_public_port = int(data['peer_public_port'])
-            except (ValueError, TypeError):
-                LoggerFactory.get_logger().error(f'Invalid peer port: {data.get("peer_public_port")}')
-                return
-
-            LoggerFactory.get_logger().info(f'Processing P2P Offer (legacy): Peer={peer_client}, Addr={peer_public_ip}:{peer_public_port}')
-
-            # Initiate P2P connection (Multiplexing mode)
-            self.p2p_hole_punch.initiate_connection(uid, peer_client, peer_public_ip, peer_public_port)
-
-    def _send_exchange_packet(self, peer_name: str):
-        """
-        Send EXCHANGE packet to server to establish UDP NAT mapping.
-        """
-        try:
-            # Get server host from config
             server_url = self.config_data['server']['url']
             parsed = urlparse(server_url)
             server_host = parsed.hostname
+            signal_port = self.config_data.get('p2p_signal_port', SERVER_P2P_SIGNAL_PORT)
 
-            # Create EXCHANGE packet: b'EXCHANGE:' + client_name
-            client_name = self.config_data['client_name']
-            exchange_packet = b'EXCHANGE:' + client_name.encode('utf-8')
-
-            # Send to server's P2P exchange port (default 19999)
-            exchange_port = self.config_data.get('p2p_exchange_port', SERVER_P2P_SIGNAL_PORT)
-
-            # Prepare punching sockets and get first socket for EXCHANGE
-            exchange_sock = self.p2p_hole_punch.prepare_for_exchange(peer_name)
-
-            # [修改点 1] 增加对 Socket 有效性的检查 (fileno != -1)
-            if not exchange_sock or exchange_sock.fileno() == -1:
-                LoggerFactory.get_logger().warn('Socket not ready or closed, skipping EXCHANGE')
-                return
+            # Create N4 EXCHANGE packet
+            exchange_pkt = N4Packet.exchange(session_id)
 
             # Send 3 times to avoid packet loss
             for _ in range(3):
                 try:
-                    # [修改点 2] 发送前再次检查，防止发送过程中被其他线程关闭
-                    if exchange_sock.fileno() == -1:
+                    if sock.fileno() == -1:
                         return
-                    exchange_sock.sendto(exchange_packet, (server_host, exchange_port))
+                    sock.sendto(exchange_pkt, (server_host, signal_port))
                     time.sleep(0.05)
                 except OSError as e:
-                    # [修改点 3] 忽略 "Bad file descriptor" 错误，这表示 Socket 被轮换了
-                    if e.errno == 9:
+                    if e.errno == 9:  # Bad file descriptor
                         return
-                    # 其他 IO 错误通过日志记录但不崩溃
-                    LoggerFactory.get_logger().debug(f"Send EXCHANGE partial fail: {e}")
+                    LoggerFactory.get_logger().debug(f"Send EXCHANGE error: {e}")
 
-            # Get local port for logging
-            try:
-                local_port = exchange_sock.getsockname()[1]
-                LoggerFactory.get_logger().info(f'Sent EXCHANGE from local port {local_port} to {server_host}:{exchange_port}')
-            except Exception:
-                # 获取端口名失败通常意味着 Socket 已关闭，忽略即可
-                pass
+            LoggerFactory.get_logger().info(
+                f'Sent N4 EXCHANGE to {server_host}:{signal_port}, session={session_id.hex()}'
+            )
 
         except Exception as e:
-            # 捕获所有其他异常，防止线程崩溃
-            LoggerFactory.get_logger().error(f'Failed to send EXCHANGE packet: {e}')
-            # LoggerFactory.get_logger().error(traceback.format_exc())
+            LoggerFactory.get_logger().error(f'Failed to send EXCHANGE: {e}')
 
     def _handle_p2p_peer_info(self, data: dict):
-        """Handle P2P_PEER_INFO from server (contains peer's actual UDP port)"""
-        uid_hex = data['uid']
-        peer_client = data['peer_client']
+        """Handle P2P_PEER_INFO from server - contains peer's actual UDP port"""
+        session_id_hex = data['session_id']
+        peer_name = data['peer_client']
         peer_ip = data['peer_ip']
-        peer_udp_port = int(data['peer_udp_port'])
+        peer_port = int(data['peer_port'])
 
         LoggerFactory.get_logger().info(
-            f'Received P2P_PEER_INFO: Peer={peer_client}, UDP={peer_ip}:{peer_udp_port}, UID={uid_hex}'
+            f'Received P2P_PEER_INFO: peer={peer_name}, addr={peer_ip}:{peer_port}'
         )
 
-        # 尝试移除 pending，无论是否存在都继续往下走
-        self.pending_p2p_offers.pop(uid_hex, None)
+        # Remove pending session
+        self.pending_sessions.pop(session_id_hex, None)
 
-        # Convert uid
-        try:
-            uid = bytes.fromhex(uid_hex)
-        except:
-            uid = uid_hex.encode()
-
-        # 无论是否是 Multiplexing，都将最新的 Peer 信息传递给底层
-        # 底层 P2PHolePunch.initiate_connection 负责判断：
-        # - 如果地址没变 -> 忽略
-        # - 如果地址变了 -> 触发 Re-punching (复用 Socket)
-        self.p2p_hole_punch.initiate_connection(uid, peer_client, peer_ip, peer_udp_port)
+        # Start hole punching with peer info
+        self.tunnel_manager.receive_peer_info(peer_name, peer_ip, peer_port)
 
     def _on_p2p_data_received(self, uid: bytes, data: bytes):
-        """
-        Callback when data comes from P2P Tunnel.
-        Forward it to the local socket (via tcp_forward_client).
-        """
-        # 直接调用 send_by_uid，它会找到对应的 socket 并发送数据给本地应用 (如 SSH Server)
+        """Callback when data comes from P2P Tunnel"""
         self.forward_client.send_by_uid(uid, data)
 
-    def _send_p2p_failed(self, uid: bytes):
-        """Notify server about failure (Legacy support)"""
+    def _on_tunnel_closed(self, peer_name: str):
+        """Callback when tunnel is closed"""
+        LoggerFactory.get_logger().info(f"Tunnel to {peer_name} closed")
+
+    def request_p2p_tunnel(self, target_client: str, uid: bytes):
+        """
+        Request P2P tunnel for a connection.
+        Called by tcp_forward_client when C2C connection is initiated.
+        """
+        # Check if tunnel already established
+        if self.tunnel_manager.is_tunnel_established(target_client):
+            # Register UID and use existing tunnel
+            self.tunnel_manager.register_uid(uid, target_client)
+            LoggerFactory.get_logger().info(f"Reusing tunnel to {target_client} for UID {uid.hex()}")
+            return True
+
+        # Check if tunnel is being established
+        if self.tunnel_manager.has_tunnel(target_client):
+            # Register UID and wait for tunnel
+            self.tunnel_manager.register_uid(uid, target_client)
+            return True
+
+        # Request server to initiate P2P punch
+        self._send_punch_request(target_client)
+
+        # Register UID for when tunnel is ready
+        self.tunnel_manager.register_uid(uid, target_client)
+        return True
+
+    def _send_punch_request(self, target_client: str):
+        """Send P2P_PUNCH_REQUEST to server"""
         try:
-            message: MessageEntity = {
-                'type_': MessageTypeConstant.P2P_FAILED,
-                'data': {'uid': uid.hex() if isinstance(uid, bytes) else uid}
+            msg: MessageEntity = {
+                'type_': MessageTypeConstant.P2P_PUNCH_REQUEST,
+                'data': {
+                    'target_client': target_client
+                }
             }
-            self.ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
-        except Exception:
-            pass
+            if self.ws.sock and self.ws.sock.connected:
+                self.ws.send(
+                    NatSerialization.dumps(msg, ContextUtils.get_password(), self.compress_support),
+                    websocket.ABNF.OPCODE_BINARY
+                )
+                LoggerFactory.get_logger().info(f"Sent P2P_PUNCH_REQUEST for {target_client}")
+        except Exception as e:
+            LoggerFactory.get_logger().error(f"Failed to send punch request: {e}")
 
     def on_open(self, ws):
         with OPEN_CLOSE_LOCK:
@@ -498,11 +380,10 @@ class WebsocketClient:
                 self.forward_client.close()
                 self.udp_forward_client.close()
 
-                # Stop P2P if running
-                if self.p2p_hole_punch:
-                    self.p2p_hole_punch.stop()
-                    # Re-start P2P service
-                    self.p2p_hole_punch.start()
+                # Restart tunnel manager
+                if self.tunnel_manager:
+                    self.tunnel_manager.stop()
+                    self.tunnel_manager.start()
 
                 self.forward_client.update_websocket(ws)
                 self.udp_forward_client.update_websocket(ws)
@@ -533,11 +414,6 @@ class WebsocketClient:
                 self.udp_forward_client.set_running(True)
                 self.heart_beat_task.is_running = True
 
-                # Restart UDP refresh loop
-                if not self._udp_refresh_running:
-                    self._udp_refresh_running = True
-                    self._start_udp_refresh()
-
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
 
@@ -549,11 +425,9 @@ class WebsocketClient:
             LoggerFactory.get_logger().info(f'WS Closed: {a}, {b}')
             self.heart_beat_task.is_running = False
             self.forward_client.close()
-            # Stop P2P
-            if self.p2p_hole_punch:
-                self.p2p_hole_punch.stop()
-            # Stop UDP refresh
-            self._udp_refresh_running = False
+            # Stop tunnel manager
+            if self.tunnel_manager:
+                self.tunnel_manager.stop()
 
 
 def signal_handler(sig, frame):

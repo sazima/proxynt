@@ -47,7 +47,6 @@ class MyWebSocketaHandler(WebSocketHandler):
     p2p_supported: bool = False  # Whether client supports P2P
     public_ip: str = None        # Client's public IP
     public_port: int = None      # Client's public port (WebSocket connection port)
-    udp_public_port: int = None  # Client's actual UDP port (from EXCHANGE)
 
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock: Lock
@@ -56,10 +55,6 @@ class MyWebSocketaHandler(WebSocketHandler):
     # uid → (source_handler, target_handler, rule_name, protocol, target_ip_port)
     c2c_uid_to_routing: Dict[bytes, Tuple['MyWebSocketaHandler', 'MyWebSocketaHandler', str, str, str]] = {}
     c2c_lock: Lock = Lock()
-
-    # P2P pending pairs waiting for EXCHANGE
-    # (client_a, client_b) -> [uid1_hex, uid2_hex, ...]
-    pending_p2p_pairs: Dict[Tuple[str, str], List[str]] = {}
 
     def open(self, *args: str, **kwargs: str):
         self.lock = Lock()
@@ -76,15 +71,11 @@ class MyWebSocketaHandler(WebSocketHandler):
 
         # Record client's public IP and port for P2P
         self.public_ip = self.request.headers.get("X-Real-IP") or self.request.remote_ip
-        # 2. 优先从 Nginx Header 获取 Port (关键修改)
         try:
-            # 先尝试读取 Nginx 传来的 X-Remote-Port
             nginx_port = self.request.headers.get("X-Remote-Port")
             if nginx_port:
                 self.public_port = int(nginx_port)
-                # LoggerFactory.get_logger().info(f"Got port from Nginx header: {self.public_port}")
             else:
-                # 如果没有 Header，才尝试从 socket 获取 (本地调试模式)
                 if self.request.connection and self.request.connection.stream and self.request.connection.stream.socket:
                     peer_address = self.request.connection.stream.socket.getpeername()
                     self.public_port = peer_address[1]
@@ -134,28 +125,23 @@ class MyWebSocketaHandler(WebSocketHandler):
                     heart_beat_task.update_business_activity(self.client_name)
 
             if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
-                data: TcpOverWebsocketMessage = message_dict['data']  # TCP message
+                data: TcpOverWebsocketMessage = message_dict['data']
                 uid = data['uid']
 
                 # 检查是否为 C2C 连接
                 is_c2c = uid in self.c2c_uid_to_routing
 
-                # --- 安全检查：连接所有权校验 ---
+                # 安全检查：连接所有权校验
                 if not is_c2c:
-                    # 检查此 UID 是否属于当前 WebSocket 连接
-                    # TcpForwardClient 维护了 uid -> connection -> socket_server -> websocket_handler
                     conn = tcp_forward_client.uid_to_connection.get(uid)
                     if not conn or conn.socket_server.websocket_handler != self:
                         LoggerFactory.get_logger().warning(f"Security Alert: Client {self.client_name} tried to inject TCP data to UID {uid.hex()} belonging to another client/session.")
                         return
-                # -------------------------------
 
                 if is_c2c:
                     source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
 
-                    # 确定路由方向并转发
                     if self == source_handler:
-                        # 数据从源客户端 (C) → 目标客户端 (A)
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
                             message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
@@ -167,33 +153,28 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 binary=True
                             )
                     elif self == target_handler:
-                        # 数据从目标客户端 (A) → 源客户端 (C)
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
                                                    source_handler.compress_support),
                             binary=True
                         )
 
-                    # 处理连接关闭（空数据）
                     if not data['data']:
                         async with self.c2c_lock:
                             self.c2c_uid_to_routing.pop(uid, None)
                             LoggerFactory.get_logger().info(f'C2C 连接关闭 UID: {uid.hex()}')
                 else:
-                    # 现有的外部转发逻辑
                     await tcp_forward_client.send_to_socket(uid, data['data'])
+
             elif message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_UDP:
-                data: TcpOverWebsocketMessage = message_dict['data']  # UDP message
+                data: TcpOverWebsocketMessage = message_dict['data']
                 uid = data['uid']
 
-                # 检查是否为 C2C 连接
                 is_c2c = uid in self.c2c_uid_to_routing
 
-                # --- 安全检查：连接所有权校验 ---
                 if not is_c2c:
                     is_owned = False
                     udp_client = UdpForwardClient.get_instance()
-                    # 检查该 UID 是否存在于属于当前客户端的 UDP Server 中
                     if self.client_name in udp_client.client_name_to_udp_server_set:
                         for server in udp_client.client_name_to_udp_server_set[self.client_name]:
                             if server.get_endpoint_by_uid(uid):
@@ -203,14 +184,11 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if not is_owned:
                         LoggerFactory.get_logger().warning(f"Security Alert: Client {self.client_name} tried to inject UDP data to UID {uid.hex()} belonging to another client/session.")
                         return
-                # -------------------------------
 
                 if is_c2c:
                     source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
 
-                    # 确定路由方向并转发
                     if self == source_handler:
-                        # 数据从源客户端 (C) → 目标客户端 (A)
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
                             message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
@@ -222,17 +200,13 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 binary=True
                             )
                     elif self == target_handler:
-                        # 数据从目标客户端 (A) → 源客户端 (C)
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
                                                    source_handler.compress_support),
                             binary=True
                         )
                 else:
-                    # 现有的外部 UDP 转发逻辑
                     port = 0
-
-                    # Find corresponding UDP port
                     for p, srv in list(UdpForwardClient.get_instance().udp_servers.items()):
                         for endpoint_uid, endpoint in srv.uid_to_endpoint.items():
                             if endpoint_uid == uid:
@@ -246,12 +220,11 @@ class MyWebSocketaHandler(WebSocketHandler):
                     else:
                         LoggerFactory.get_logger().warning(f"Could not find UDP port for UID {uid}")
 
-            elif message_dict['type_'] == MessageTypeConstant.P2P_PRE_CONNECT:
-                # 客户端启动时主动请求建立 P2P
+            elif message_dict['type_'] == MessageTypeConstant.P2P_PUNCH_REQUEST:
+                # Client requests P2P punch with another client
                 data = message_dict['data']
                 target_client = data.get('target_client')
-                # 可以在这里校验一下权限，比如检查 C2C 规则是否允许
-                await self._trigger_p2p_handshake(target_client)
+                await self._handle_punch_request(target_client)
 
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
@@ -260,20 +233,19 @@ class MyWebSocketaHandler(WebSocketHandler):
                     client_name = push_config['client_name']
                     self.version = push_config.get('version')
 
-                    # Check if client supports P2P
                     self.p2p_supported = push_config.get('p2p_supported', False)
                     if self.p2p_supported:
                         LoggerFactory.get_logger().info(f'Client {client_name} supports P2P, public address: {self.public_ip}:{self.public_port}')
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
                     if client_name in self.client_name_to_handler:
-                        self.close(None, 'DuplicatedClientName')  # Duplicated client name on server
+                        self.close(None, 'DuplicatedClientName')
                         raise DuplicatedName()
                     data: List[ClientData] = push_config['config_list']
                     name_in_client = {x['name'] for x in data}
                     if client_name in client_name_to_config_in_server:
                         for config_in_server in client_name_to_config_in_server[client_name]:
                             if config_in_server['name'] in name_in_client:
-                                self.close(None, 'DuplicatedNameWithServerConfig')  # Name conflicts with server config
+                                self.close(None, 'DuplicatedNameWithServerConfig')
                                 raise DuplicatedName()
                         data.extend(client_name_to_config_in_server[client_name])
                     key = push_config['key']
@@ -289,8 +261,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                         name_set.add(d['name'])
                     self.client_name = client_name
                     self.names = name_set
-                    listen_socket_list = []
-                    udp_servers_list = []
                     for d in data:
                         protocol = d.get('protocol', 'tcp')
                         d.setdefault('protocol', protocol)
@@ -304,9 +274,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                             d.setdefault('speed_limit', 0)
                             speed_limit: float = d.get('speed_limit', 0)
                             await tcp_forward_client.register_listen_server(listen_socket, d['name'], ip_port, self, speed_limit)
-                            listen_socket_list.append(listen_socket)
                         else:
-                            # UDP processing
                             ip_port = d['local_ip'] + ':' + str(d['local_port'])
                             d.setdefault('speed_limit', 0)
                             speed_limit: float = d.get('speed_limit', 0)
@@ -320,7 +288,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.client_name_to_handler[client_name] = self
                     self.push_config = push_config
 
-                    # 推送此客户端相关的 C2C 规则（作为源客户端的规则）
+                    # 推送此客户端相关的 C2C 规则
                     c2c_rules = ContextUtils.get_c2c_rules()
                     client_c2c_rules = []
                     for rule in c2c_rules:
@@ -334,7 +302,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 'speed_limit': rule.get('speed_limit', 0.0),
                                 'p2p_enabled': rule.get('p2p_enabled', True)
                             }
-                            # Add mode-specific fields
                             if 'target_ip' in rule and 'target_port' in rule:
                                 client_rule['target_ip'] = rule['target_ip']
                                 client_rule['target_port'] = rule['target_port']
@@ -342,43 +309,34 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 client_rule['target_service'] = rule['target_service']
                             client_c2c_rules.append(client_rule)
                     message_dict['data']['client_to_client_rules'] = client_c2c_rules
-                    LoggerFactory.get_logger().info(f'send  {len(client_c2c_rules)}  C2C to  {client_name}')
+                    LoggerFactory.get_logger().info(f'send {len(client_c2c_rules)} C2C to {client_name}')
 
-                    # Send client's public IP and port back (for P2P hole punching)
                     message_dict['data']['public_ip'] = self.public_ip
                     message_dict['data']['public_port'] = self.public_port
 
                 await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support), binary=True)
+
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.recv_time = time.time()
 
-            # 乐观发送模式：处理连接确认消息
             elif message_dict['type_'] == MessageTypeConstant.CONNECT_CONFIRMED:
                 data: TcpOverWebsocketMessage = message_dict['data']
                 uid = data['uid']
 
-                # 检查是否为 C2C 连接
                 if uid in self.c2c_uid_to_routing:
                     source_handler, target_handler, rule_name, protocol, _ = self.c2c_uid_to_routing[uid]
-                    # 转发确认消息到源客户端 (C)
-                    if self == target_handler:  # 消息来自目标客户端 (A)
+                    if self == target_handler:
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
                                                    source_handler.compress_support),
                             binary=True
                         )
-                        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                            LoggerFactory.get_logger().debug(f'C2C 连接已确认并转发到源客户端 UID: {uid.hex()}')
                 elif uid in tcp_forward_client.uid_to_connection:
-                    # 现有的外部转发逻辑
                     connection = tcp_forward_client.uid_to_connection[uid]
                     connection.connection_confirmed = True
-                    if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                        LoggerFactory.get_logger().debug(f'连接已确认 uid: {uid}, 发送缓存数据 {len(connection.early_data_buffer)} 个包')
 
-                    # 发送缓存的早期数据
                     for buffered_data in connection.early_data_buffer:
-                        if buffered_data:  # 跳过空数据
+                        if buffered_data:
                             send_message: MessageEntity = {
                                 'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
                                 'data': {
@@ -396,22 +354,18 @@ class MyWebSocketaHandler(WebSocketHandler):
                 uid = data['uid']
                 LoggerFactory.get_logger().info(f'连接失败 uid: {uid}')
 
-                # 检查是否为 C2C 连接
                 if uid in self.c2c_uid_to_routing:
                     source_handler, target_handler, rule_name, protocol, _ = self.c2c_uid_to_routing[uid]
-                    # 转发失败消息到源客户端 (C)
-                    if self == target_handler:  # 消息来自目标客户端 (A)
+                    if self == target_handler:
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
                                                    source_handler.compress_support),
                             binary=True
                         )
-                    # 清理路由表
                     async with self.c2c_lock:
                         self.c2c_uid_to_routing.pop(uid, None)
                         LoggerFactory.get_logger().info(f'C2C 连接失败并已清理 UID: {uid.hex()}')
                 elif uid in tcp_forward_client.uid_to_connection:
-                    # 现有的外部转发逻辑
                     connection = tcp_forward_client.uid_to_connection[uid]
                     await tcp_forward_client.close_connection_async(connection)
 
@@ -423,7 +377,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                 source_rule_name = data['source_rule_name']
                 protocol = data['protocol']
 
-                # 1. Verify rule exists and is enabled
                 c2c_rules = ContextUtils.get_c2c_rules()
                 rule = self._find_c2c_rule(source_rule_name, self.client_name, target_client, c2c_rules)
                 if not rule or not rule.get('enabled', True):
@@ -431,7 +384,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                     await self._send_connection_failed(uid, source_rule_name)
                     return
 
-                # 2. Check if target client is online
                 if target_client not in self.client_name_to_handler:
                     LoggerFactory.get_logger().warn(f'Target client offline: {target_client}')
                     await self._send_connection_failed(uid, source_rule_name)
@@ -439,27 +391,18 @@ class MyWebSocketaHandler(WebSocketHandler):
 
                 target_handler = self.client_name_to_handler[target_client]
 
-                # 3. Determine target IP and port
-                # --- Security Fix: Force use configuration from server rule, ignore client provided target_ip/port ---
                 if 'target_ip' in rule and 'target_port' in rule:
-                    # Direct mode configured on server
-                    use_direct_mode = True
                     target_ip = rule['target_ip']
                     target_port = rule['target_port']
-                    target_service = None # Clear potentially misleading data
-                    LoggerFactory.get_logger().info(f'C2C forward request (direct mode enforced): {self.client_name} → {target_client}/{target_ip}:{target_port} (UID: {uid.hex()}, protocol: {protocol})')
-
+                    LoggerFactory.get_logger().info(f'C2C forward request (direct mode): {self.client_name} → {target_client}/{target_ip}:{target_port} (UID: {uid.hex()})')
                     ip_port = f"{target_ip}:{target_port}"
                     service_name = source_rule_name
                 else:
-                    # Service mode
-                    use_direct_mode = False
                     target_service = rule.get('target_service')
                     if not target_service:
-                        # Fallback if config is malformed, though validation should prevent this
                         target_service = rule['name']
 
-                    LoggerFactory.get_logger().info(f'C2C forward request (service mode enforced): {self.client_name} → {target_client}/{target_service} (UID: {uid.hex()}, protocol: {protocol})')
+                    LoggerFactory.get_logger().info(f'C2C forward request (service mode): {self.client_name} → {target_client}/{target_service} (UID: {uid.hex()})')
 
                     target_service_config = self._find_service_config(target_handler, target_service)
                     if not target_service_config:
@@ -469,72 +412,18 @@ class MyWebSocketaHandler(WebSocketHandler):
                     ip_port = f"{target_service_config['local_ip']}:{target_service_config['local_port']}"
                     service_name = target_service
 
-                # 4. Store routing information
                 async with self.c2c_lock:
                     self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol, ip_port)
 
-                # 4.5. Try P2P if both clients support it AND rule allows it (only for TCP)
-                p2p_attempted = False
-                rule_p2p_enabled = rule.get('p2p_enabled', True)  # Default to True if not specified
-                # P2P check: both support it
+                # Try P2P if both clients support it AND rule allows it (only for TCP)
+                rule_p2p_enabled = rule.get('p2p_enabled', True)
                 if (protocol == 'tcp' and rule_p2p_enabled and
                         self.p2p_supported and target_handler.p2p_supported):
+                    # Initiate P2P punch via N4 Signal Service
+                    await self._initiate_p2p_punch(target_client)
 
-                    LoggerFactory.get_logger().info(f'Both clients support P2P, initiating EXCHANGE phase: {self.client_name} ↔ {target_client}')
-                    p2p_attempted = True
-
-                    # Convert uid bytes to hex string for JSON serialization
-                    uid_hex = uid.hex()
-
-                    # Register this pair as pending (waiting for EXCHANGE from both sides)
-                    pair_key = tuple(sorted([self.client_name, target_client]))
-                    if pair_key not in self.pending_p2p_pairs:
-                        self.pending_p2p_pairs[pair_key] = []
-                    self.pending_p2p_pairs[pair_key].append(uid_hex)
-
-                    # Send P2P_OFFER to source client (initiator)
-                    # Note: We don't send peer_public_port yet, clients should send EXCHANGE first
-                    p2p_offer_to_source: MessageEntity = {
-                        'type_': MessageTypeConstant.P2P_OFFER,
-                        'data': {
-                            'uid': uid_hex,
-                            'role': 'initiator',  # This client initiates the connection
-                            'peer_client': target_client,
-                            'service_name': service_name,
-                            'ip_port': ip_port,
-                            'need_exchange': True  # Signal client to send EXCHANGE packet
-                        }
-                    }
-                    await self.write_message(
-                        NatSerialization.dumps(p2p_offer_to_source, ContextUtils.get_password(), self.compress_support),
-                        binary=True
-                    )
-
-                    # Send P2P_OFFER to target client (responder)
-                    p2p_offer_to_target: MessageEntity = {
-                        'type_': MessageTypeConstant.P2P_OFFER,
-                        'data': {
-                            'uid': uid_hex,
-                            'role': 'responder',  # This client responds to the connection
-                            'peer_client': self.client_name,
-                            'service_name': service_name,
-                            'ip_port': ip_port,
-                            'need_exchange': True  # Signal client to send EXCHANGE packet
-                        }
-                    }
-                    await target_handler.write_message(
-                        NatSerialization.dumps(p2p_offer_to_target, ContextUtils.get_password(), target_handler.compress_support),
-                        binary=True
-                    )
-
-                    LoggerFactory.get_logger().info(f'P2P offers sent, waiting for EXCHANGE from both clients')
-                    # Note: We still send REQUEST_TO_CONNECT as fallback
-                    # If P2P succeeds, clients will use P2P; if fails, they'll use WebSocket relay
-
-                # 5. Forward REQUEST_TO_CONNECT to target client (always send as fallback)
+                # Forward REQUEST_TO_CONNECT to target client (always as fallback)
                 message_type = MessageTypeConstant.REQUEST_TO_CONNECT if protocol == 'tcp' else MessageTypeConstant.REQUEST_TO_CONNECT_UDP
-
-                LoggerFactory.get_logger().debug(f'Preparing REQUEST_TO_CONNECT: service_name={service_name}, ip_port={ip_port}, uid={uid.hex()}')
 
                 forward_message: MessageEntity = {
                     'type_': message_type,
@@ -542,7 +431,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                         'name': service_name,
                         'uid': uid,
                         'ip_port': ip_port,
-                        'data': b''
+                        'data': b'',
+                        'source_client': self.client_name  # Add source client info for P2P routing
                     }
                 }
                 await target_handler.write_message(
@@ -555,6 +445,67 @@ class MyWebSocketaHandler(WebSocketHandler):
                 LoggerFactory.get_logger().debug(f'on_message processing took {time.time() - start_time}s')
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
+
+    async def _handle_punch_request(self, target_client: str):
+        """Handle P2P_PUNCH_REQUEST from client"""
+        if not target_client:
+            return
+
+        if target_client not in self.client_name_to_handler:
+            LoggerFactory.get_logger().warn(f'P2P punch request: target {target_client} offline')
+            return
+
+        target_handler = self.client_name_to_handler[target_client]
+
+        if not (self.p2p_supported and target_handler.p2p_supported):
+            LoggerFactory.get_logger().info(f'P2P punch skipped: not both clients support P2P')
+            return
+
+        await self._initiate_p2p_punch(target_client)
+
+    async def _initiate_p2p_punch(self, target_client: str):
+        """Initiate P2P hole punching via N4 Signal Service"""
+        n4_service = ContextUtils.get_n4_signal_service()
+        if not n4_service:
+            LoggerFactory.get_logger().warning('N4 Signal Service not available')
+            return
+
+        target_handler = self.client_name_to_handler.get(target_client)
+        if not target_handler:
+            return
+
+        # Request punch session from N4 Signal Service
+        session_id = n4_service.request_punch(self.client_name, target_client)
+        session_id_hex = session_id.hex()
+
+        LoggerFactory.get_logger().info(
+            f'Initiating P2P punch: {self.client_name} <-> {target_client}, session={session_id_hex}'
+        )
+
+        # Send P2P_PUNCH_REQUEST to both clients
+        msg_to_self: MessageEntity = {
+            'type_': MessageTypeConstant.P2P_PUNCH_REQUEST,
+            'data': {
+                'session_id': session_id_hex,
+                'peer_name': target_client
+            }
+        }
+        await self.write_message(
+            NatSerialization.dumps(msg_to_self, ContextUtils.get_password(), self.compress_support),
+            binary=True
+        )
+
+        msg_to_target: MessageEntity = {
+            'type_': MessageTypeConstant.P2P_PUNCH_REQUEST,
+            'data': {
+                'session_id': session_id_hex,
+                'peer_name': self.client_name
+            }
+        }
+        await target_handler.write_message(
+            NatSerialization.dumps(msg_to_target, ContextUtils.get_password(), target_handler.compress_support),
+            binary=True
+        )
 
     def on_close(self, code: int = None, reason: str = None) -> None:
         asyncio.ensure_future(self._on_close(code, reason))
@@ -569,13 +520,12 @@ class MyWebSocketaHandler(WebSocketHandler):
                     await TcpForwardClient.get_instance().close_by_client_name(self.client_name)
                     await UdpForwardClient.get_instance().close_by_client_name(self.client_name)
 
-                    # 清理 C2C 连接（此客户端作为源或目标）
+                    # 清理 C2C 连接
                     async with self.c2c_lock:
                         uids_to_remove = []
                         for uid, (source_handler, target_handler, rule_name, protocol, _) in list(self.c2c_uid_to_routing.items()):
                             if source_handler == self or target_handler == self:
                                 uids_to_remove.append(uid)
-                                # 通知另一端关闭连接
                                 other_handler = target_handler if source_handler == self else source_handler
                                 close_message: MessageEntity = {
                                     'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP if protocol == 'tcp' else MessageTypeConstant.WEBSOCKET_OVER_UDP,
@@ -595,7 +545,6 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 except Exception as e:
                                     LoggerFactory.get_logger().error(f'通知 C2C 对端关闭失败: {e}')
 
-                        # 清理所有相关的 UID
                         for uid in uids_to_remove:
                             self.c2c_uid_to_routing.pop(uid, None)
                             LoggerFactory.get_logger().info(f'已清理 C2C 连接 UID: {uid.hex()}')
@@ -643,55 +592,3 @@ class MyWebSocketaHandler(WebSocketHandler):
             NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support),
             binary=True
         )
-
-    async def _trigger_p2p_handshake(self, target_client_name: str, rule: dict = None):
-        """主动触发两个客户端之间的 P2P 握手"""
-        if target_client_name not in self.client_name_to_handler:
-            LoggerFactory.get_logger().warn(f'P2P Pre-connect: Target {target_client_name} offline')
-            return
-
-        target_handler = self.client_name_to_handler[target_client_name]
-
-        # 检查双方是否支持 P2P 以及端口是否有效
-        # 注意：这里依赖于 UDP Heartbeat 已经更新了 public_port
-        if self.p2p_supported and self.public_port > 0 and target_handler.p2p_supported and target_handler.public_port > 0:
-
-            LoggerFactory.get_logger().info(f'Initiating P2P Handshake: {self.client_name} <-> {target_client_name}')
-
-            # 构造 Offer 发给源 (Initiator)
-            offer_to_source: MessageEntity = {
-                'type_': MessageTypeConstant.P2P_OFFER,
-                'data': {
-                    'uid': '00000000', # 预连接不绑定特定 UID，使用全0或特定标识
-                    'role': 'initiator',
-                    'peer_client': target_client_name,
-                    'peer_public_ip': target_handler.public_ip,
-                    'peer_public_port': target_handler.public_port,
-                    'service_name': 'pre_connect', # 标识这是预连接
-                    'ip_port': '' # 预连接不需要内网目标
-                }
-            }
-            await self.write_message(
-                NatSerialization.dumps(offer_to_source, ContextUtils.get_password(), self.compress_support),
-                binary=True
-            )
-
-            # 构造 Offer 发给目标 (Responder)
-            offer_to_target: MessageEntity = {
-                'type_': MessageTypeConstant.P2P_OFFER,
-                'data': {
-                    'uid': '00000000',
-                    'role': 'responder',
-                    'peer_client': self.client_name,
-                    'peer_public_ip': self.public_ip,
-                    'peer_public_port': self.public_port,
-                    'service_name': 'pre_connect',
-                    'ip_port': ''
-                }
-            }
-            await target_handler.write_message(
-                NatSerialization.dumps(offer_to_target, ContextUtils.get_password(), target_handler.compress_support),
-                binary=True
-            )
-        else:
-            LoggerFactory.get_logger().info(f'P2P Pre-connect skipped: Conditions not met. SelfPort={self.public_port}, TargetPort={target_handler.public_port}')

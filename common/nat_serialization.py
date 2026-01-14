@@ -88,7 +88,7 @@ class NatSerialization:
         elif type_ in (MessageTypeConstant.P2P_OFFER, MessageTypeConstant.P2P_ANSWER,
                        MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
                        MessageTypeConstant.P2P_FAILED, MessageTypeConstant.P2P_PRE_CONNECT,
-                       MessageTypeConstant.P2P_PEER_INFO): # 新增 P2P_PEER_INFO
+                       MessageTypeConstant.P2P_PEER_INFO, MessageTypeConstant.P2P_PUNCH_REQUEST):
             # P2P messages: use JSON encoding of data content only
             data_content = data.get('data', {})
             body = json.dumps(data_content).encode()
@@ -217,7 +217,7 @@ class NatSerialization:
         elif type_.decode() in (MessageTypeConstant.P2P_OFFER, MessageTypeConstant.P2P_ANSWER,
                                 MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
                                 MessageTypeConstant.P2P_FAILED, MessageTypeConstant.P2P_PRE_CONNECT,
-                                MessageTypeConstant.P2P_PEER_INFO): # 新增 P2P_PEER_INFO
+                                MessageTypeConstant.P2P_PEER_INFO, MessageTypeConstant.P2P_PUNCH_REQUEST):
             # P2P messages: JSON decode
             data = json.loads(body.decode())
             return_data: MessageEntity = {

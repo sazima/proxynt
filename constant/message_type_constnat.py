@@ -28,3 +28,4 @@ class MessageTypeConstant:
     P2P_PRE_CONNECT = 'g'
     P2P_EXCHANGE = 'h'        # UDP exchange to establish NAT mapping
     P2P_PEER_INFO = 'i'       # Server sends peer's actual UDP port
+    P2P_PUNCH_REQUEST = 'j'   # Request to initiate P2P hole punching

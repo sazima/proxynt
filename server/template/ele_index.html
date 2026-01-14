@@ -293,7 +293,7 @@
                     <el-input v-model="c2cForm.speed_limit" type="number" autocomplete="off"></el-input>
                 </el-tooltip>
             </el-form-item>
-            <el-form-item label="启用P2P" :label-width="formLabelWidth" v-show="true">
+            <el-form-item label="启用P2P" :label-width="formLabelWidth" v-show="false">
                 <el-switch v-model="c2cForm.p2p_enabled"></el-switch>
                 <el-tooltip content="P2P模式通过UDP打洞直连，降低延迟和服务器负载。失败时自动回退到中转模式。" placement="top">
                     <i class="el-icon-question" style="color: #909399; margin-left: 5px;"></i>
