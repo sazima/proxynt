@@ -95,8 +95,14 @@ class UdpForwardClient:
         self.client_name_to_udp_server_set: Dict[str, Set[UdpPublicSocketServer]] = {}
         self.client_name_to_lock: Dict[str, AsyncioLock] = {}
         self.running = True
-        # Start UDP receive thread
+
+        # Threads
         self.receive_thread = None
+        self.signal_thread = None
+
+        # P2P Signal Port
+        self.p2p_signal_port = 19999
+        self.p2p_signal_socket = None
 
     @classmethod
     def get_instance(cls):
@@ -106,11 +112,65 @@ class UdpForwardClient:
         return cls._instance
 
     def start_receive_thread(self):
-        """Start the UDP data receiving thread"""
+        """Start threads"""
+        # 1. Business UDP Loop
         if self.receive_thread is None:
             self.receive_thread = threading.Thread(target=self._udp_receive_loop)
             self.receive_thread.daemon = True
             self.receive_thread.start()
+
+        # 2. P2P Signal Loop (DISABLED - now handled by P2PExchangeService)
+        # if self.signal_thread is None:
+        #     self.signal_thread = threading.Thread(target=self._p2p_signal_loop)
+        #     self.signal_thread.daemon = True
+        #     self.signal_thread.start()
+
+    def _p2p_signal_loop(self):
+        """Loop to handle P2P address refresh signals"""
+        try:
+            self.p2p_signal_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.p2p_signal_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Listen on 0.0.0.0:19999
+            self.p2p_signal_socket.bind(('0.0.0.0', self.p2p_signal_port))
+            LoggerFactory.get_logger().info(f"P2P Signal Server started on UDP port {self.p2p_signal_port}")
+
+            while self.running:
+                try:
+                    data, addr = self.p2p_signal_socket.recvfrom(1024)
+
+                    # Protocol: b'P2P_PING:client_name'
+                    if data.startswith(b'P2P_PING:'):
+                        try:
+                            # Decode client name
+                            client_name = data.split(b':')[1].decode('utf-8')
+
+                            # Import here to avoid circular dependency
+                            from server.websocket_handler import MyWebSocketaHandler
+
+                            # Find handler by name
+                            handler = MyWebSocketaHandler.client_name_to_handler.get(client_name)
+
+                            if handler:
+                                # Update public address
+                                # Only log if changed to reduce noise
+                                if handler.public_port != addr[1] or handler.public_ip != addr[0]:
+                                    LoggerFactory.get_logger().info(f"P2P Addr Update [{client_name}]: {addr[0]}:{addr[1]}")
+
+                                handler.public_ip = addr[0]
+                                handler.public_port = addr[1]
+
+                        except Exception as e:
+                            pass
+                            # LoggerFactory.get_logger().warn(f"P2P signal error: {e}")
+
+                except OSError:
+                    pass
+                except Exception as e:
+                    LoggerFactory.get_logger().error(f"P2P signal loop error: {e}")
+                    time.sleep(1)
+
+        except Exception as e:
+            LoggerFactory.get_logger().error(f"Failed to start P2P Signal Server: {e}")
 
     def _udp_receive_loop(self):
         """UDP data receiving loop"""
@@ -139,7 +199,7 @@ class UdpForwardClient:
     def _handle_udp_data(self, server: UdpPublicSocketServer, data: bytes, address: Tuple[str, int]):
         """Handle received UDP data"""
         # Add or get the corresponding endpoint
-        LoggerFactory.get_logger().info(f"UDP received {server.socket_server}, len: {len(data)} bytes")
+        # LoggerFactory.get_logger().info(f"UDP received {server.socket_server}, len: {len(data)} bytes")
 
         uid = server.add_endpoint(address)
 
@@ -262,5 +322,12 @@ class UdpForwardClient:
                 server.socket_server.close()
             except Exception:
                 pass
+
+        if self.p2p_signal_socket:
+            try:
+                self.p2p_signal_socket.close()
+            except:
+                pass
+
         self.udp_servers.clear()
         self.client_name_to_udp_server_set.clear()

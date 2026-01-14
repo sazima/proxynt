@@ -143,6 +143,8 @@ class TcpForwardClient:
         self.c2c_listeners: Dict[str, socket.socket] = {}   # rule_name → listener socket
         self.c2c_uid_to_rule: Dict[bytes, str] = {}         # UID → rule_name
 
+        self.p2p_client = None
+
     def set_running(self, running: bool):
         self.socket_event_loop.is_running = running
 
@@ -289,6 +291,17 @@ class TcpForwardClient:
             LoggerFactory.get_logger().error(f'{traceback.format_exc()}')
             LoggerFactory.get_logger().warn(f'get os error: {str(e)}, close')
             recv = b''
+        if self.p2p_client and self.p2p_client.send_data(connection.uid, recv):
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug(f'Sent {len(recv)} bytes via P2P (UID: {connection.uid.hex()})')
+
+            # 如果收到空数据(recv为空)，说明本地连接关闭，需要同步关闭连接
+            if not recv:
+                try:
+                    self.close_connection(each)
+                except Exception:
+                    pass
+            return
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {

@@ -68,8 +68,8 @@ class NatSerialization:
                 target_ip = data_content['target_ip'].encode()
                 target_port = data_content['target_port']
                 body = struct.pack(f'BBBBBBH{UID_LEN}s{len(target_client)}s{len(target_ip)}s{len(source_rule_name)}s{len(protocol)}s',
-                                 magic, mode_flag, len(target_client), len(target_ip), len(source_rule_name), len(protocol),
-                                 target_port, uid, target_client, target_ip, source_rule_name, protocol)
+                                   magic, mode_flag, len(target_client), len(target_ip), len(source_rule_name), len(protocol),
+                                   target_port, uid, target_client, target_ip, source_rule_name, protocol)
             else:
                 # Service mode: check if new format or old format for backward compatibility
                 target_service = data_content['target_service'].encode()
@@ -78,16 +78,17 @@ class NatSerialization:
                 magic = 0xFF  # Magic number to identify new format
                 mode_flag = 0x00
                 body = struct.pack(f'BBBBBB{UID_LEN}s{len(target_client)}s{len(target_service)}s{len(source_rule_name)}s{len(protocol)}s',
-                                 magic, mode_flag, len(target_client), len(target_service), len(source_rule_name), len(protocol),
-                                 uid, target_client, target_service, source_rule_name, protocol)
+                                   magic, mode_flag, len(target_client), len(target_service), len(source_rule_name), len(protocol),
+                                   uid, target_client, target_service, source_rule_name, protocol)
 
         elif type_ == MessageTypeConstant.PUSH_CONFIG:
             body =  json.dumps(data).encode()
         elif type_ == MessageTypeConstant.PING:
             body =  b''
         elif type_ in (MessageTypeConstant.P2P_OFFER, MessageTypeConstant.P2P_ANSWER,
-                      MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
-                      MessageTypeConstant.P2P_FAILED):
+                       MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
+                       MessageTypeConstant.P2P_FAILED, MessageTypeConstant.P2P_PRE_CONNECT,
+                       MessageTypeConstant.P2P_PEER_INFO): # 新增 P2P_PEER_INFO
             # P2P messages: use JSON encoding of data content only
             data_content = data.get('data', {})
             body = json.dumps(data_content).encode()
@@ -215,7 +216,8 @@ class NatSerialization:
             return return_data
         elif type_.decode() in (MessageTypeConstant.P2P_OFFER, MessageTypeConstant.P2P_ANSWER,
                                 MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
-                                MessageTypeConstant.P2P_FAILED):
+                                MessageTypeConstant.P2P_FAILED, MessageTypeConstant.P2P_PRE_CONNECT,
+                                MessageTypeConstant.P2P_PEER_INFO): # 新增 P2P_PEER_INFO
             # P2P messages: JSON decode
             data = json.loads(body.decode())
             return_data: MessageEntity = {

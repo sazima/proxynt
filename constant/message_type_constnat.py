@@ -24,3 +24,7 @@ class MessageTypeConstant:
     P2P_CANDIDATE = 'd'       # Exchange NAT traversal information
     P2P_SUCCESS = 'e'         # P2P connection established successfully
     P2P_FAILED = 'f'          # P2P connection failed, fallback to relay
+
+    P2P_PRE_CONNECT = 'g'
+    P2P_EXCHANGE = 'h'        # UDP exchange to establish NAT mapping
+    P2P_PEER_INFO = 'i'       # Server sends peer's actual UDP port

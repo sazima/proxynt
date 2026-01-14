@@ -47,6 +47,7 @@ class MyWebSocketaHandler(WebSocketHandler):
     p2p_supported: bool = False  # Whether client supports P2P
     public_ip: str = None        # Client's public IP
     public_port: int = None      # Client's public port (WebSocket connection port)
+    udp_public_port: int = None  # Client's actual UDP port (from EXCHANGE)
 
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock: Lock
@@ -55,6 +56,10 @@ class MyWebSocketaHandler(WebSocketHandler):
     # uid → (source_handler, target_handler, rule_name, protocol, target_ip_port)
     c2c_uid_to_routing: Dict[bytes, Tuple['MyWebSocketaHandler', 'MyWebSocketaHandler', str, str, str]] = {}
     c2c_lock: Lock = Lock()
+
+    # P2P pending pairs waiting for EXCHANGE
+    # (client_a, client_b) -> [uid1_hex, uid2_hex, ...]
+    pending_p2p_pairs: Dict[Tuple[str, str], List[str]] = {}
 
     def open(self, *args: str, **kwargs: str):
         self.lock = Lock()
@@ -240,6 +245,14 @@ class MyWebSocketaHandler(WebSocketHandler):
                         await UdpForwardClient.get_instance().send_udp(uid, data['data'], port)
                     else:
                         LoggerFactory.get_logger().warning(f"Could not find UDP port for UID {uid}")
+
+            elif message_dict['type_'] == MessageTypeConstant.P2P_PRE_CONNECT:
+                # 客户端启动时主动请求建立 P2P
+                data = message_dict['data']
+                target_client = data.get('target_client')
+                # 可以在这里校验一下权限，比如检查 C2C 规则是否允许
+                await self._trigger_p2p_handshake(target_client)
+
             elif message_dict['type_'] == MessageTypeConstant.PUSH_CONFIG:
                 async with self.lock:
                     LoggerFactory.get_logger().info(f'Received push config: {message_dict}')
@@ -463,28 +476,33 @@ class MyWebSocketaHandler(WebSocketHandler):
                 # 4.5. Try P2P if both clients support it AND rule allows it (only for TCP)
                 p2p_attempted = False
                 rule_p2p_enabled = rule.get('p2p_enabled', True)  # Default to True if not specified
-                # P2P check: both support it, and public ports are valid (not 0)
+                # P2P check: both support it
                 if (protocol == 'tcp' and rule_p2p_enabled and
-                        self.p2p_supported and self.public_port > 0 and
-                        target_handler.p2p_supported and target_handler.public_port > 0):
+                        self.p2p_supported and target_handler.p2p_supported):
 
-                    LoggerFactory.get_logger().info(f'Both clients support P2P, attempting hole punching: {self.client_name} ↔ {target_client}')
+                    LoggerFactory.get_logger().info(f'Both clients support P2P, initiating EXCHANGE phase: {self.client_name} ↔ {target_client}')
                     p2p_attempted = True
 
                     # Convert uid bytes to hex string for JSON serialization
                     uid_hex = uid.hex()
 
+                    # Register this pair as pending (waiting for EXCHANGE from both sides)
+                    pair_key = tuple(sorted([self.client_name, target_client]))
+                    if pair_key not in self.pending_p2p_pairs:
+                        self.pending_p2p_pairs[pair_key] = []
+                    self.pending_p2p_pairs[pair_key].append(uid_hex)
+
                     # Send P2P_OFFER to source client (initiator)
+                    # Note: We don't send peer_public_port yet, clients should send EXCHANGE first
                     p2p_offer_to_source: MessageEntity = {
                         'type_': MessageTypeConstant.P2P_OFFER,
                         'data': {
                             'uid': uid_hex,
                             'role': 'initiator',  # This client initiates the connection
                             'peer_client': target_client,
-                            'peer_public_ip': target_handler.public_ip,
-                            'peer_public_port': target_handler.public_port,
                             'service_name': service_name,
-                            'ip_port': ip_port
+                            'ip_port': ip_port,
+                            'need_exchange': True  # Signal client to send EXCHANGE packet
                         }
                     }
                     await self.write_message(
@@ -499,10 +517,9 @@ class MyWebSocketaHandler(WebSocketHandler):
                             'uid': uid_hex,
                             'role': 'responder',  # This client responds to the connection
                             'peer_client': self.client_name,
-                            'peer_public_ip': self.public_ip,
-                            'peer_public_port': self.public_port,
                             'service_name': service_name,
-                            'ip_port': ip_port
+                            'ip_port': ip_port,
+                            'need_exchange': True  # Signal client to send EXCHANGE packet
                         }
                     }
                     await target_handler.write_message(
@@ -510,7 +527,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                         binary=True
                     )
 
-                    LoggerFactory.get_logger().info(f'P2P offers sent to both clients')
+                    LoggerFactory.get_logger().info(f'P2P offers sent, waiting for EXCHANGE from both clients')
                     # Note: We still send REQUEST_TO_CONNECT as fallback
                     # If P2P succeeds, clients will use P2P; if fails, they'll use WebSocket relay
 
@@ -626,3 +643,55 @@ class MyWebSocketaHandler(WebSocketHandler):
             NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support),
             binary=True
         )
+
+    async def _trigger_p2p_handshake(self, target_client_name: str, rule: dict = None):
+        """主动触发两个客户端之间的 P2P 握手"""
+        if target_client_name not in self.client_name_to_handler:
+            LoggerFactory.get_logger().warn(f'P2P Pre-connect: Target {target_client_name} offline')
+            return
+
+        target_handler = self.client_name_to_handler[target_client_name]
+
+        # 检查双方是否支持 P2P 以及端口是否有效
+        # 注意：这里依赖于 UDP Heartbeat 已经更新了 public_port
+        if self.p2p_supported and self.public_port > 0 and target_handler.p2p_supported and target_handler.public_port > 0:
+
+            LoggerFactory.get_logger().info(f'Initiating P2P Handshake: {self.client_name} <-> {target_client_name}')
+
+            # 构造 Offer 发给源 (Initiator)
+            offer_to_source: MessageEntity = {
+                'type_': MessageTypeConstant.P2P_OFFER,
+                'data': {
+                    'uid': '00000000', # 预连接不绑定特定 UID，使用全0或特定标识
+                    'role': 'initiator',
+                    'peer_client': target_client_name,
+                    'peer_public_ip': target_handler.public_ip,
+                    'peer_public_port': target_handler.public_port,
+                    'service_name': 'pre_connect', # 标识这是预连接
+                    'ip_port': '' # 预连接不需要内网目标
+                }
+            }
+            await self.write_message(
+                NatSerialization.dumps(offer_to_source, ContextUtils.get_password(), self.compress_support),
+                binary=True
+            )
+
+            # 构造 Offer 发给目标 (Responder)
+            offer_to_target: MessageEntity = {
+                'type_': MessageTypeConstant.P2P_OFFER,
+                'data': {
+                    'uid': '00000000',
+                    'role': 'responder',
+                    'peer_client': self.client_name,
+                    'peer_public_ip': self.public_ip,
+                    'peer_public_port': self.public_port,
+                    'service_name': 'pre_connect',
+                    'ip_port': ''
+                }
+            }
+            await target_handler.write_message(
+                NatSerialization.dumps(offer_to_target, ContextUtils.get_password(), target_handler.compress_support),
+                binary=True
+            )
+        else:
+            LoggerFactory.get_logger().info(f'P2P Pre-connect skipped: Conditions not met. SelfPort={self.public_port}, TargetPort={target_handler.public_port}')
