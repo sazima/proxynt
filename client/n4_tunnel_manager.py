@@ -1,843 +1,589 @@
-"""
-N4 Tunnel Manager for P2P Communication
-
-Features:
-- Single tunnel per client pair (bidirectional)
-- Multiplexed data over single UDP socket
-- Persistent tunnels with idle timeout
-- Automatic disconnect synchronization
-"""
 import logging
 import socket
 import select
 import threading
 import time
-import traceback
+import struct
 from collections import defaultdict
 from typing import Dict, Optional, Callable, List, Tuple
 
 from common.logger_factory import LoggerFactory
-from common.n4_protocol import N4Packet, N4Error
+from common.n4_protocol import N4Packet
 from client.tunnel_protocol import TunnelPacket
 from common.kcp import Kcp
+
+# ==========================================
+# 1. KCP 适配器
+# ==========================================
 class N4Kcp(Kcp):
     def __init__(self, conv, socket_sender):
         super().__init__(conv)
         self.socket_sender = socket_sender
 
-    # 【关键】KCP 库通过调用这个方法把数据发给 UDP
     def output(self, buf):
-        # buf 是 bytes 类型
         self.socket_sender(buf)
+
 def get_pair_key(client_a: str, client_b: str) -> Tuple[str, str]:
-    """Generate consistent tunnel key regardless of direction"""
     return (min(client_a, client_b), max(client_a, client_b))
 
+# ==========================================
+# 2. 复刻 n4.py 的核心打洞器 (线程安全版)
+# ==========================================
+class N4Puncher:
+    """
+    负责执行 UDP 打洞流程：
+    - 创建 Socket 池
+    - 发送 Exchange
+    - 收到 Peer Info 后猛烈发包
+    - 锁定胜出的连接
+    """
+    def __init__(self,
+                 local_client_name: str,
+                 peer_name: str,
+                 server_host: str,
+                 server_port: int,
+                 session_id: bytes):
+        self.local_client_name = local_client_name
+        self.peer_name = peer_name
+        self.server_host = server_host
+        self.server_port = server_port
+        self.session_id = session_id
 
+        # N4 配置
+        self.src_port_start = 30000
+        self.src_port_count = 25
+        self.peer_port_offset = 20
+        self.pool: List[socket.socket] = []
+
+        self.running = True
+        self.logger = LoggerFactory.get_logger()
+
+    def _init_sock_pool(self):
+        """初始化 Socket 池"""
+        self.pool = []
+        start_port = self.src_port_start
+        # 尝试寻找可用端口段
+        for _ in range(5):
+            try:
+                temp_pool = []
+                for i in range(self.src_port_count):
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    try:
+                        if hasattr(socket, "SO_REUSEPORT"):
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                    except:
+                        pass
+                    sock.bind(('0.0.0.0', start_port + i))
+                    sock.setblocking(False)
+                    temp_pool.append(sock)
+                self.pool = temp_pool
+                self.logger.info(f"Created {len(self.pool)} sockets for punch to {self.peer_name}")
+                return
+            except OSError:
+                start_port += 100
+                for s in temp_pool: s.close()
+
+        raise Exception("Failed to create socket pool")
+
+    def stop(self):
+        self.running = False
+        for s in self.pool:
+            try: s.close()
+            except: pass
+        self.pool = []
+
+    def punch(self, peer_ip: str, peer_port: int) -> Tuple[socket.socket, Tuple[str, int]]:
+        """执行打洞流程，返回 (胜出的Socket, 真实的Peer地址)"""
+        if not self.pool:
+            try:
+                self._init_sock_pool()
+            except Exception as e:
+                self.logger.error(f"Init pool failed: {e}")
+                return None, None
+
+        # 1. 向 Signal Server 发送 Exchange
+        exchg_pkt = N4Packet.exchange(self.session_id)
+        for _ in range(3):
+            if self.pool:
+                try: self.pool[0].sendto(exchg_pkt, (self.server_host, self.server_port))
+                except: pass
+            time.sleep(0.05)
+
+        self.logger.info(f"Sent EXCHANGE. Target Peer: {peer_ip}:{peer_port}")
+
+        # 2. 准备打洞目标 (包含端口预测)
+        target_base = (peer_ip, peer_port)
+        targets = set()
+        targets.add(target_base)
+        for i in range(1, self.peer_port_offset + 1):
+            if peer_port + i <= 65535: targets.add((peer_ip, peer_port + i))
+            if peer_port - i > 0: targets.add((peer_ip, peer_port - i))
+
+        punch_pkt = N4Packet.punch(self.session_id)
+
+        # 3. 猛烈发包
+        self.logger.info(f"Punching {self.peer_name}...")
+
+        # 先发几轮探测
+        for _ in range(5):
+            if not self.running: return None, None
+            for sock in self.pool:
+                for t in targets:
+                    try: sock.sendto(punch_pkt, t)
+                    except: pass
+            time.sleep(0.1)
+
+        # 4. 监听回复 (Winner Takes All)
+        start_time = time.time()
+        # 15秒打洞超时
+        while self.running and time.time() - start_time < 15:
+            # 持续发包保持 NAT 映射
+            for sock in self.pool:
+                for t in targets:
+                    try: sock.sendto(punch_pkt, t)
+                    except: pass
+
+            r, _, _ = select.select(self.pool, [], [], 0.5)
+
+            if not r:
+                continue
+
+            for sock in r:
+                try:
+                    data, addr = sock.recvfrom(65536)
+                    recv_ident = N4Packet.dec_punch(data)
+
+                    if recv_ident == self.session_id:
+                        self.logger.info(f"!!! WINNER !!! PUNCH from {addr} (Socket fd: {sock.fileno()})")
+
+                        winning_sock = sock
+                        winning_addr = addr
+
+                        self._cleanup_losers(winning_sock)
+
+                        # 疯狂回包建立信任，防止对方不知道我们已经通了
+                        for _ in range(10):
+                            try: winning_sock.sendto(punch_pkt, winning_addr)
+                            except: pass
+                            time.sleep(0.02)
+
+                        return winning_sock, winning_addr
+                except Exception:
+                    pass
+
+        return None, None
+
+    def _cleanup_losers(self, winner):
+        new_pool = []
+        for s in self.pool:
+            if s != winner:
+                try: s.close()
+                except: pass
+            else:
+                new_pool.append(s)
+        self.pool = new_pool
+
+# ==========================================
+# 3. 隧道对象
+# ==========================================
 class N4Tunnel:
-    """
-    Represents a single P2P tunnel to a peer.
-
-    The tunnel is bidirectional - both A->B and B->A use the same tunnel.
-    """
-
-    def __init__(self, pair_key: Tuple[str, str], local_name: str, peer_name: str):
+    def __init__(self, pair_key, local_name, peer_name, socket, addr, session_id):
         self.pair_key = pair_key
         self.local_name = local_name
         self.peer_name = peer_name
+        self.session_id = session_id
 
-        # Socket pool for hole punching (from N4 strategy)
-        self.socket_pool: List[socket.socket] = []
+        self.socket = socket      # 胜出的 Socket
+        self.peer_addr = addr     # 真实的 Peer 地址
+        self.verified = False     # 是否双向验证 (收到 Keepalive ACK 才算)
 
-        # Active socket after punch success
-        self.active_socket: Optional[socket.socket] = None
-        self.peer_addr: Optional[Tuple[str, int]] = None
-
-        # Pending peer info (received before punching starts)
-        self.pending_peer_ip: Optional[str] = None
-        self.pending_peer_port: Optional[int] = None
-
-        # State: idle, punching, established, closing
-        self.status: str = 'idle'
-        self.last_activity: float = time.time()
-
-        # Health check state
-        self.last_keepalive_sent: float = 0  # Time when last keepalive was sent
-        self.keepalive_pending: bool = False  # Waiting for keepalive response
-        self.keepalive_failures: int = 0  # Consecutive keepalive failures
-        self.max_keepalive_failures: int = 2  # Max failures before marking dead
-        self.punch_start_time: float = 0  # Time when punching started
-
-        # N4 hole punching configuration
-        self.src_port_start: int = 30000
-        self.src_port_count: int = 25
-        self.peer_port_offset: int = 20
-
-        # Session identifier for N4 protocol (6 bytes)
-        self.session_id: bytes = b'\x00' * 6
-
-        # Lock for thread safety
+        self.last_activity = time.time()
         self.lock = threading.Lock()
 
-        # --- KCP 集成 ---
-        # conv 这里暂时硬编码为 1，实际场景最好协商
-        self.kcp = N4Kcp(conv=1, socket_sender=self._raw_udp_send)
-        # [修改] 开启流模式，这很重要！
+        # [修复] 补全心跳相关属性，防止 AttributeError
+        self.last_keepalive_sent = 0
+        self.keepalive_pending = False
+        self.keepalive_fails = 0
+
+        # KCP 配置
+        self.kcp = N4Kcp(conv=1, socket_sender=self._send_udp)
         self.kcp.stream = True
         self.kcp.nodelay(1, 10, 2, 1)
         self.kcp.wndsize(128, 128)
-        # self.kcp.setmtu(1350)
-        self.kcp.setmtu(1200)
+        self.kcp.setmtu(1350) # 略小于 1400 防止 UDP 分片
 
-        # [新增] 这里必须加上这个 buffer！
         self.stream_buffer = bytearray()
 
+    def _send_udp(self, data):
+        try:
+            self.socket.sendto(data, self.peer_addr)
+        except:
+            pass
 
-    def _raw_udp_send(self, data):
-        """KCP 回调：发送 UDP 原始包"""
-        if self.active_socket and self.peer_addr:
-            try:
-                self.active_socket.sendto(data, self.peer_addr)
-            except OSError:
-                pass
-
-    def is_established(self) -> bool:
-        return self.status == 'established' and self.active_socket is not None
-
-    def send(self, data: bytes) -> bool:
-        """
-        上层业务调用发送
-        """
-        if not self.is_established():
-            return False
-
+    def send_kcp(self, data: bytes):
         with self.lock:
-            # 1. 将数据塞入 KCP 发送队列
             self.kcp.send(data)
             self.kcp.flush()
-
-            # 2. 立即驱动一次 KCP (flush)，减少延迟
-            # 注意：pykcp 的 update 需要传入当前毫秒时间戳
+            # 立即驱动一次
             current = int(time.time() * 1000) & 0xffffffff
             self.kcp.update(current)
-
         self.last_activity = time.time()
-        return True
-
-    def send_keepalive(self) -> bool:
-        """Send keepalive packet"""
-        return self.send(TunnelPacket.pack_keepalive())
 
     def close(self):
-        """Close all sockets"""
-        with self.lock:
-            for sock in self.socket_pool:
-                try:
-                    sock.close()
-                except:
-                    pass
-            self.socket_pool.clear()
+        try: self.socket.close()
+        except: pass
 
-            if self.active_socket:
-                try:
-                    self.active_socket.close()
-                except:
-                    pass
-                self.active_socket = None
-
-            self.status = 'closing'
-
-
+# ==========================================
+# 4. 管理器 (集成到 proxynt)
+# ==========================================
 class N4TunnelManager:
-    """
-    Manages P2P tunnels using N4 hole punching protocol.
-
-    Key Features:
-    - Single tunnel per client pair (bidirectional)
-    - Tunnel key: (min(a,b), max(a,b))
-    - Multiplexed data over single UDP socket
-    - Persistent tunnels with idle timeout
-    """
-
     def __init__(self, local_client_name: str, server_host: str, server_port: int):
         self.local_client_name = local_client_name
         self.server_host = server_host
         self.server_port = server_port
 
-        # Tunnels indexed by pair_key: (min(a,b), max(a,b)) -> N4Tunnel
+        # 存储已建立的隧道
         self.tunnels: Dict[Tuple[str, str], N4Tunnel] = {}
-
-        # UID routing: uid -> peer_name
+        # 存储正在进行的打洞任务
+        self.punchers: Dict[Tuple[str, str], N4Puncher] = {}
+        # UID 映射
         self.uid_to_peer: Dict[bytes, str] = {}
 
-        # Global lock
+        # 记录正在请求打洞的 Peer，防止重复请求
+        self.pending_punch_requests: set = set()
+
         self.lock = threading.Lock()
-
-        # Running state
-        self.running = False
-        self.receive_thread: Optional[threading.Thread] = None
-        self.monitor_thread: Optional[threading.Thread] = None
-
-        # Current bind port for socket pool (sequential)
-        self.current_bind_port = 30000
-
-        # Callbacks
-        self.on_data_received: Optional[Callable[[bytes, bytes], None]] = None
-        self.on_tunnel_closed: Optional[Callable[[str], None]] = None
-        self.on_punch_failed: Optional[Callable[[str], None]] = None  # Called when punch times out
-
-        # Punch timeout (seconds) - if punching takes longer, fall back to WebSocket
-        self.punch_timeout: float = 10.0
-
-        # WebSocket client reference (for sending messages)
-        self.ws_client = None
-        # 用于缓存接收到的分片数据: uid -> bytearray
-        self.reassembly_buffers: Dict[bytes, bytearray] = defaultdict(bytearray)
-
-    def set_ws_client(self, ws_client):
-        """Set WebSocket client reference"""
-        self.ws_client = ws_client
-
-
-    def _kcp_tick_loop(self):
-        """KCP 驱动线程"""
-        while self.running:
-            try:
-                # 获取当前毫秒时间戳 (ctypes 需要 int)
-                current_time = int(time.time() * 1000) & 0xffffffff
-
-                with self.lock:
-                    # 复制一份，避免遍历时字典变化
-                    active_tunnels = [t for t in self.tunnels.values() if t.is_established()]
-
-                for tunnel in active_tunnels:
-                    # 加锁保护每个 tunnel 的 update
-                    try:
-                        if hasattr(tunnel, 'kcp'):
-                            with tunnel.lock:
-                                tunnel.kcp.update(current_time)
-                    except Exception as e:
-                        # 捕获单个 tunnel 的错误，不影响其他
-                        LoggerFactory.get_logger().error(f"KCP update error for {tunnel.peer_name}: {e}")
-            except Exception as e:
-                # 捕获外层错误，防止线程退出
-                LoggerFactory.get_logger().error(f"KCP tick loop error: {e}")
-
-            # 10ms 间隔
-            time.sleep(0.01)
-
-    def start(self):
-        """Start the tunnel manager"""
-        if self.running:
-            return
         self.running = True
 
-        # Start receive loop
-        self.receive_thread = threading.Thread(target=self._receive_loop, daemon=True)
-        self.receive_thread.start()
+        self.on_data_received = None
+        self.on_tunnel_closed = None
+        self.on_punch_failed = None # 兼容旧代码调用
 
-        # Start monitor loop
-        self.monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
-        self.monitor_thread.start()
+        self.ws_client = None
 
-        LoggerFactory.get_logger().info(f'N4 Tunnel Manager started for {self.local_client_name}')
-        # --- 启动 KCP Tick 线程 ---
-        self.tick_thread = threading.Thread(target=self._kcp_tick_loop, daemon=True)
-        self.tick_thread.start()
+    def set_ws_client(self, ws):
+        self.ws_client = ws
 
-        LoggerFactory.get_logger().info(f'N4 Tunnel Manager started...')
+    def start(self):
+        self.running = True
+        # 启动主循环线程 (处理数据接收、心跳、KCP Tick)
+        threading.Thread(target=self._main_loop, daemon=True).start()
+        LoggerFactory.get_logger().info("N4 Tunnel Manager Started")
 
     def stop(self):
-        """Stop the tunnel manager"""
         self.running = False
-
         with self.lock:
-            for tunnel in self.tunnels.values():
-                tunnel.close()
+            for t in self.tunnels.values(): t.close()
+            for p in self.punchers.values(): p.stop()
             self.tunnels.clear()
-            self.uid_to_peer.clear()
+            self.punchers.clear()
 
-        LoggerFactory.get_logger().info('N4 Tunnel Manager stopped')
-
-    def get_tunnel(self, peer_name: str) -> Optional[N4Tunnel]:
-        """Get existing tunnel to peer (if established)"""
-        pair_key = get_pair_key(self.local_client_name, peer_name)
-        with self.lock:
-            tunnel = self.tunnels.get(pair_key)
-            if tunnel and tunnel.is_established():
-                return tunnel
-        return None
-
-    def has_tunnel(self, peer_name: str) -> bool:
-        """Check if tunnel to peer exists (any state)"""
-        pair_key = get_pair_key(self.local_client_name, peer_name)
-        with self.lock:
-            return pair_key in self.tunnels
-
-    def is_tunnel_established(self, peer_name: str) -> bool:
-        """Check if tunnel to peer is established"""
-        tunnel = self.get_tunnel(peer_name)
-        return tunnel is not None and tunnel.is_established()
-
-    def is_tunnel_failed(self, peer_name: str) -> bool:
-        """Check if tunnel to peer has failed (should use WebSocket instead)"""
-        pair_key = get_pair_key(self.local_client_name, peer_name)
-        with self.lock:
-            tunnel = self.tunnels.get(pair_key)
-            if tunnel:
-                return tunnel.status == 'failed'
-        return False
-
-    def is_tunnel_punching(self, peer_name: str) -> bool:
-        """Check if tunnel to peer is currently punching"""
-        pair_key = get_pair_key(self.local_client_name, peer_name)
-        with self.lock:
-            tunnel = self.tunnels.get(pair_key)
-            if tunnel:
-                return tunnel.status == 'punching'
-        return False
-
-    def clear_failed_tunnel(self, peer_name: str):
-        """Clear a failed tunnel so it can be retried later"""
-        pair_key = get_pair_key(self.local_client_name, peer_name)
-        with self.lock:
-            tunnel = self.tunnels.get(pair_key)
-            if tunnel and tunnel.status == 'failed':
-                tunnel.close()
-                self.tunnels.pop(pair_key, None)
-                LoggerFactory.get_logger().info(f"Cleared failed tunnel to {peer_name}")
+    # --- 外部调用接口 (被 run_client.py 调用) ---
 
     def register_uid(self, uid: bytes, peer_name: str):
-        """Register a UID to use a tunnel (for multiplexing)"""
         with self.lock:
             self.uid_to_peer[uid] = peer_name
 
     def unregister_uid(self, uid: bytes):
-        """Unregister a UID"""
         with self.lock:
             self.uid_to_peer.pop(uid, None)
 
-    def prepare_punch(self, peer_name: str, session_id: bytes) -> Optional[socket.socket]:
-        """
-        Prepare for hole punching by creating socket pool.
-        Returns the first socket for sending EXCHANGE packet.
-        """
+    # [修复] 补充 run_client.py 需要的方法
+    def is_tunnel_established(self, peer_name: str) -> bool:
+        """检查隧道是否已建立 (在 tunnels 列表中)"""
+        pair_key = get_pair_key(self.local_client_name, peer_name)
+        with self.lock:
+            return pair_key in self.tunnels
+
+    # [修复] 补充 run_client.py 需要的方法
+    def has_tunnel(self, peer_name: str) -> bool:
+        """检查是否有隧道 (包括正在建立的)"""
+        pair_key = get_pair_key(self.local_client_name, peer_name)
+        with self.lock:
+            return (pair_key in self.tunnels) or (pair_key in self.punchers)
+
+    def prepare_punch(self, peer_name: str, session_id: bytes):
+        """收到 Server 的 PUNCH_REQUEST 后调用"""
         pair_key = get_pair_key(self.local_client_name, peer_name)
 
         with self.lock:
-            # Check if tunnel already exists
-            existing = self.tunnels.get(pair_key)
-            if existing:
-                if existing.is_established():
-                    LoggerFactory.get_logger().info(f"Tunnel to {peer_name} already established")
-                    return None
-                if existing.status == 'punching':
-                    LoggerFactory.get_logger().info(f"Tunnel to {peer_name} already punching")
-                    return existing.socket_pool[0] if existing.socket_pool else None
+            # === 关键修改：对方请求打洞，说明对方可能重启了 ===
+            # 即使我们本地有隧道，也认为是脏数据，必须强制清除，以便建立新连接
+            if pair_key in self.tunnels:
+                LoggerFactory.get_logger().warn(f"Peer {peer_name} requested new punch. Destroying old tunnel.")
+                old_tunnel = self.tunnels[pair_key]
+                old_tunnel.close()
+                del self.tunnels[pair_key]
 
-            # Create new tunnel
-            tunnel = N4Tunnel(pair_key, self.local_client_name, peer_name)
-            tunnel.session_id = session_id
-            tunnel.status = 'punching'
-            tunnel.punch_start_time = time.time()  # Track when punching started
+            # 检查是否正在打洞中，如果是，则忽略重复请求
+            if pair_key in self.punchers:
+                return None
 
-            # Create socket pool
-            self._create_socket_pool(tunnel)
-
-            self.tunnels[pair_key] = tunnel
-
-            LoggerFactory.get_logger().info(
-                f"Prepared punch for {peer_name}, session={session_id.hex()}, "
-                f"{len(tunnel.socket_pool)} sockets created"
-            )
-
-            if tunnel.socket_pool:
-                return tunnel.socket_pool[0]
-            return None
+            puncher = N4Puncher(self.local_client_name, peer_name,
+                                self.server_host, self.server_port, session_id)
+            try:
+                puncher._init_sock_pool()
+                self.punchers[pair_key] = puncher
+                return puncher.pool[0]
+            except:
+                return None
 
     def receive_peer_info(self, peer_name: str, peer_ip: str, peer_port: int):
-        """
-        Called when server sends PEER_INFO after EXCHANGE phase.
-        Starts the actual hole punching.
-        """
+        """收到 Server 的 PEER_INFO，启动打洞线程"""
         pair_key = get_pair_key(self.local_client_name, peer_name)
+        with self.lock:
+            puncher = self.punchers.get(pair_key)
+
+        if puncher:
+            # 启动独立线程去执行耗时的打洞操作
+            threading.Thread(
+                target=self._run_punch_task,
+                args=(puncher, pair_key, peer_ip, peer_port),
+                daemon=True
+            ).start()
+
+    def _run_punch_task(self, puncher: N4Puncher, pair_key, ip, port):
+        """独立的打洞线程"""
+        sock, addr = puncher.punch(ip, port)
 
         with self.lock:
-            tunnel = self.tunnels.get(pair_key)
-            if not tunnel:
-                LoggerFactory.get_logger().warning(f"No tunnel found for peer {peer_name}")
-                return
+            # 无论成功失败，都从 punchers 中移除
+            if pair_key in self.punchers:
+                del self.punchers[pair_key]
 
-            tunnel.pending_peer_ip = peer_ip
-            tunnel.pending_peer_port = peer_port
+            # 清除 pending 标记，允许再次请求
+            if puncher.peer_name in self.pending_punch_requests:
+                self.pending_punch_requests.remove(puncher.peer_name)
 
-        # Start punch thread
-        threading.Thread(
-            target=self._punch_loop,
-            args=(tunnel, peer_ip, peer_port),
-            daemon=True
-        ).start()
+            if sock and addr:
+                # 打洞成功，创建隧道对象
+                tunnel = N4Tunnel(pair_key, self.local_client_name, puncher.peer_name, sock, addr, puncher.session_id)
+                tunnel.verified = True
+                self.tunnels[pair_key] = tunnel
 
-    # ... 在 N4TunnelManager 类中 ...
+                # 立即发送 Keepalive 探测 (激活 Verified 状态)
+                try:
+                    tunnel.send_kcp(TunnelPacket.pack_keepalive())
+                except: pass
+            else:
+                LoggerFactory.get_logger().warn(f"Punch failed for {puncher.peer_name}, traffic will stay on WebSocket")
 
     def send_data(self, uid: bytes, data: bytes) -> bool:
         """
-        Send data via tunnel.
-        Returns False if tunnel not ready or failed.
+        发送数据 (核心混合模式逻辑)
+        返回 True: 数据已通过 P2P 隧道发送
+        返回 False: 数据未发送，请调用者使用 WebSocket 发送
         """
         peer_name = self.uid_to_peer.get(uid)
-        if not peer_name:
-            return False
+        if not peer_name: return False
 
         pair_key = get_pair_key(self.local_client_name, peer_name)
+
+        # 1. 尝试获取隧道
+        tunnel = None
         with self.lock:
             tunnel = self.tunnels.get(pair_key)
 
-        if not tunnel:
-            return False
+        # 2. 隧道不存在或未验证 -> 自动降级为 WebSocket 并尝试建立隧道
+        if not tunnel or not tunnel.verified:
+            # 如果没有隧道，也没有正在进行的打洞请求，且 ws 可用 -> 触发打洞
+            if not tunnel and self.ws_client and peer_name not in self.pending_punch_requests:
+                with self.lock:
+                    # 再次检查 punchers 防止并发
+                    is_punching = pair_key in self.punchers
 
-        if tunnel.status == 'failed':
-            return False
+                if not is_punching:
+                    LoggerFactory.get_logger().info(f"Auto-triggering P2P setup for {peer_name}")
+                    self.pending_punch_requests.add(peer_name)
+                    # 调用 WebSocketClient 发送请求
+                    self.ws_client._send_punch_request(peer_name)
 
-        if tunnel.status == 'punching':
-            elapsed = time.time() - tunnel.punch_start_time
-            if elapsed > self.punch_timeout:
-                tunnel.status = 'failed'
-                return False
-            return False
+            # 如果隧道存在但未验证 (单向通)，发送心跳催促
+            if tunnel and not tunnel.verified:
+                # 限制频率 1秒一次
+                if time.time() - tunnel.last_activity > 1.0:
+                    tunnel.send_kcp(TunnelPacket.pack_keepalive())
 
-        if not tunnel.is_established():
-            return False
+            return False # 返回 False，TcpForwardClient 会自动走 WebSocket
 
-        # === 修改核心逻辑：强制应用层分片 ===
-        # TunnelPacket 的 Header 中 length 字段是 unsigned short (max 65535)
-        # 为了传输稳定性，我们将其切分为 MTU 安全的大小 (例如 1300-1400 字节)
-        # 这样 KCP 不需要处理过大的 Frame，且能避免 struct.pack 溢出
-
-        MAX_CHUNK_SIZE = 1350  # 留出 50 字节给 UDP头 + KCP头 + TunnelHeader
-
-        if len(data) <= MAX_CHUNK_SIZE:
-            # 数据较小，直接发送
+        # 3. 隧道已就绪 (Verified) -> 走 P2P (应用层分片防止 SFTP 崩溃)
+        MAX_CHUNK = 1300
+        if len(data) <= MAX_CHUNK:
             packet = TunnelPacket.pack_data(uid, data)
-            return tunnel.send(packet)
+            tunnel.send_kcp(packet)
         else:
-            # 数据较大，切片发送
-            # SSH 协议是流式的，我们只要按顺序把字节塞进去，接收端拼起来就行
             offset = 0
-            total_len = len(data)
-            success = True
-
-            while offset < total_len:
-                end = offset + MAX_CHUNK_SIZE
+            while offset < len(data):
+                end = offset + MAX_CHUNK
                 chunk = data[offset:end]
-
-                # 封装包
                 packet = TunnelPacket.pack_data(uid, chunk)
-
-                # 发送
-                if not tunnel.send(packet):
-                    success = False
-                    break
-
+                tunnel.send_kcp(packet)
                 offset = end
-
-            return success
+        return True
 
     def close_uid(self, uid: bytes):
-        """Close a specific UID stream (but keep tunnel alive)"""
         peer_name = self.uid_to_peer.get(uid)
-        if not peer_name:
-            return
-
-        tunnel = self.get_tunnel(peer_name)
-        if tunnel:
-            # Send close packet for this UID
-            packet = TunnelPacket.pack_close_uid(uid)
-            tunnel.send(packet)
-
-        self.unregister_uid(uid)
-
-    def close_tunnel(self, peer_name: str, notify_peer: bool = True):
-        """Close tunnel to peer and optionally notify the other end"""
-        pair_key = get_pair_key(self.local_client_name, peer_name)
-
-        with self.lock:
-            tunnel = self.tunnels.get(pair_key)
-            if not tunnel:
-                return
-
-            if notify_peer and tunnel.is_established():
-                # Send tunnel close packet
-                try:
-                    packet = TunnelPacket.pack_tunnel_close()
-                    tunnel.active_socket.sendto(packet, tunnel.peer_addr)
-                except:
-                    pass
-
-            tunnel.close()
-            self.tunnels.pop(pair_key, None)
-
-            # Remove all UIDs for this peer
-            uids_to_remove = [
-                uid for uid, name in self.uid_to_peer.items()
-                if name == peer_name
-            ]
-            for uid in uids_to_remove:
-                self.uid_to_peer.pop(uid, None)
-                self.reassembly_buffers.pop(uid, None) # <--- 新增：清理缓存
-
-        LoggerFactory.get_logger().info(f"Tunnel to {peer_name} closed")
-
-        if self.on_tunnel_closed:
-            self.on_tunnel_closed(peer_name)
-
-    def _create_socket_pool(self, tunnel: N4Tunnel):
-        """Create socket pool for hole punching"""
-        count = 0
-        while count < tunnel.src_port_count:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                try:
-                    if hasattr(socket, "SO_REUSEPORT"):
-                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-                except:
-                    pass
-
-                sock.bind(('0.0.0.0', self.current_bind_port))
-                sock.setblocking(False)
-                tunnel.socket_pool.append(sock)
-                count += 1
-            except OSError:
-                pass
-            finally:
-                self.current_bind_port += 1
-                if self.current_bind_port > 60000:
-                    self.current_bind_port = 30000
-
-    def _punch_loop(self, tunnel: N4Tunnel, peer_ip: str, peer_port: int):
-        """
-        Execute N4 hole punching.
-        Sends PUNCH packets to peer's predicted ports.
-        """
-        LoggerFactory.get_logger().info(
-            f"Starting punch to {tunnel.peer_name} at {peer_ip}:{peer_port}"
-        )
-
-        punch_pkt = N4Packet.punch(tunnel.session_id)
-        max_rounds = 60
-        round_count = 0
-
-        while self.running and tunnel.status == 'punching' and round_count < max_rounds:
-            try:
-                # Calculate target ports (peer_port +/- offset)
-                target_ports = set()
-                target_ports.add(peer_port)
-                for i in range(1, tunnel.peer_port_offset + 1):
-                    if peer_port + i <= 65535:
-                        target_ports.add(peer_port + i)
-                    if peer_port - i > 0:
-                        target_ports.add(peer_port - i)
-
-                # Send PUNCH packets from all sockets
-                for sock in tunnel.socket_pool:
-                    for port in target_ports:
-                        try:
-                            sock.sendto(punch_pkt, (peer_ip, port))
-                        except OSError:
-                            pass
-
-                if round_count % 10 == 0:
-                    LoggerFactory.get_logger().debug(
-                        f"Punching {tunnel.peer_name}: round {round_count}/{max_rounds}"
-                    )
-
-                time.sleep(0.5)
-                round_count += 1
-
-                # Check if established by receive loop
-                if tunnel.status == 'established':
-                    return
-
-            except Exception as e:
-                LoggerFactory.get_logger().error(f"Punch loop error: {e}")
-                break
-
-        if tunnel.status != 'established':
-            LoggerFactory.get_logger().warning(
-                f"Hole punching failed for {tunnel.peer_name} after {round_count} rounds"
-            )
-            # Cleanup failed tunnel
+        if peer_name:
+            pair_key = get_pair_key(self.local_client_name, peer_name)
             with self.lock:
-                if tunnel.pair_key in self.tunnels:
-                    self.tunnels.pop(tunnel.pair_key)
-            tunnel.close()
-
-    def _receive_loop(self):
-        """Listen on all tunnel sockets for incoming data"""
-        while self.running:
-            try:
-                sockets_map = {}  # socket -> tunnel
-                read_list = []
-
-                with self.lock:
-                    for tunnel in self.tunnels.values():
-                        if tunnel.is_established() and tunnel.active_socket:
-                            read_list.append(tunnel.active_socket)
-                            sockets_map[tunnel.active_socket] = tunnel
-                        elif tunnel.status == 'punching':
-                            for sock in tunnel.socket_pool:
-                                read_list.append(sock)
-                                sockets_map[sock] = tunnel
-
-                if not read_list:
-                    time.sleep(0.1)
-                    continue
-
-                readable, _, _ = select.select(read_list, [], [], 0.1)
-
-                for sock in readable:
-                    try:
-                        data, addr = sock.recvfrom(65536)
-                        tunnel = sockets_map.get(sock)
-                        if not tunnel:
-                            continue
-
-                        self._handle_packet(tunnel, sock, data, addr)
-
-                    except OSError:
-                        pass
-                    except Exception as e:
-                        LoggerFactory.get_logger().error(f"Receive error: {e}")
-
-            except Exception as e:
-                LoggerFactory.get_logger().error(f"Receive loop error: {e}")
-                time.sleep(1)
-
-    def _handle_packet(self, tunnel, sock: socket.socket,
-                       data: bytes, addr: Tuple[str, int]):
-        # 1. 优先处理 N4 信令
-        if len(data) == N4Packet.SIZE:
-            ident = N4Packet.dec_punch(data)
-            if ident is not None:
-                self._handle_punch_received(tunnel, sock, addr, ident)
-                return
-
-        # 2. 隧道未建立则忽略
-        if not tunnel.is_established():
-            return
-
-        # 3. KCP 输入处理 (带粘包/拆包修复)
-        if hasattr(tunnel, 'kcp'):
-            # Collect complete packets while holding the lock
-            complete_packets = []
-
-            with tunnel.lock:
-                # [Input] 将 UDP 原始数据喂给 KCP
-                try:
-                    tunnel.kcp.input(data)
-                except Exception as e:
-                    LoggerFactory.get_logger().warning(f'invalid kcp data: {e}')
-                    return
-
-                # [Recv] 从 KCP 获取所有可用的流数据，全部追加到 buffer
-                while True:
-                    chunk = tunnel.kcp.recv()
-                    if not chunk:
-                        break
-                    tunnel.stream_buffer.extend(chunk)
-
-                # [Parse] 从 buffer 中循环切出完整的 TunnelPacket
-                # TunnelPacket 头部固定 8 字节
-                HEADER_SIZE = 8
-
-                while len(tunnel.stream_buffer) >= HEADER_SIZE:
-                    # 1. 预读取头部，获取包体长度
-                    # TunnelPacket格式: type(1) + flags(1) + uid(4) + length(2)
-                    # length 是最后两个字节 (大端序 !H)
-                    # 这里的索引 6 和 7 对应 length 字段
-                    payload_len = (tunnel.stream_buffer[6] << 8) | tunnel.stream_buffer[7]
-                    if payload_len > 10 * 1024 * 1024:
-                        LoggerFactory.get_logger().error(f"异常包长度 {payload_len}，流已错位，重置缓冲区")
-                        tunnel.stream_buffer.clear()
-                        break
-
-                    total_pkt_len = HEADER_SIZE + payload_len
-
-                    if len(tunnel.stream_buffer) >= total_pkt_len:
-                        complete_packet = bytes(tunnel.stream_buffer[:total_pkt_len])
-                        del tunnel.stream_buffer[:total_pkt_len]
-                        # Collect packet, process outside lock to avoid blocking
-                        complete_packets.append(complete_packet)
-                    else:
-                        # 数据不够一个完整包，等待下次 KCP 数据到来
-                        break
-
-            # Process packets outside the lock to prevent blocking concurrent sends
-            for packet in complete_packets:
-                self._process_tunnel_payload(tunnel, sock, packet, addr)
-
-    def _process_tunnel_payload(self, tunnel, sock, data, addr):
-        """解析 TunnelPacket (原有的业务逻辑)"""
-        try:
-            result = TunnelPacket.unpack(data)
-        except:
-            return
-
-        if result is None: return
-
-        pkt_type, flags, uid, payload = result
-        tunnel.last_activity = time.time()
-
-        if pkt_type == TunnelPacket.TYPE_DATA:
-            # Auto-register UID to this tunnel's peer for bidirectional communication
-            # This allows responses to be sent back via the same P2P tunnel
-            if uid not in self.uid_to_peer:
-                self.register_uid(uid, tunnel.peer_name)
-                LoggerFactory.get_logger().debug(
-                    f'Auto-registered UID {uid.hex()} to peer {tunnel.peer_name}'
-                )
-            if self.on_data_received:
-                self.on_data_received(uid, payload)
-
-        elif pkt_type == TunnelPacket.TYPE_CLOSE_UID:
+                tunnel = self.tunnels.get(pair_key)
+            if tunnel and tunnel.verified:
+                tunnel.send_kcp(TunnelPacket.pack_close_uid(uid))
             self.unregister_uid(uid)
 
-        elif pkt_type == TunnelPacket.TYPE_KEEPALIVE:
-            try:
-                # 必须通过 tunnel.send (即 KCP) 回复
-                tunnel.send(TunnelPacket.pack_keepalive_ack())
-            except:
-                pass
-
-        elif pkt_type == TunnelPacket.TYPE_KEEPALIVE_ACK:
-            # Received keepalive response, tunnel is healthy
-            tunnel.keepalive_pending = False
-            tunnel.keepalive_failures = 0  # Reset failure count
-            LoggerFactory.get_logger().debug(
-                f"Received keepalive ACK from {tunnel.peer_name}"
-            )
-
-        elif pkt_type == TunnelPacket.TYPE_TUNNEL_CLOSE:
-            self.close_tunnel(tunnel.peer_name, notify_peer=False)
-
-
-    def _handle_punch_received(self, tunnel: N4Tunnel, sock: socket.socket,
-                               addr: Tuple[str, int], ident: bytes):
-        """Handle received PUNCH packet during hole punching"""
-        if tunnel.status != 'punching':
-            return
-
-        # Verify session ID matches
-        if ident != tunnel.session_id:
-            return
-
-        LoggerFactory.get_logger().info(
-            f"PUNCH received from {tunnel.peer_name} at {addr}"
-        )
-
-        with tunnel.lock:
-            if tunnel.status == 'established':
-                return
-
-            # Hole punch successful
-            tunnel.status = 'established'
-            tunnel.active_socket = sock
-            tunnel.peer_addr = addr
-            tunnel.last_activity = time.time()
-
-            # Close other sockets
-            # for s in tunnel.socket_pool:
-                # if s != sock:
-                #     try:
-                #         s.close()
-                #     except:
-                #         pass
-            # tunnel.socket_pool = [sock]
-
-        # Send PUNCH back to confirm (multiple times for reliability)
-        punch_pkt = N4Packet.punch(tunnel.session_id)
-        for _ in range(5):
-            try:
-                sock.sendto(punch_pkt, addr)
-            except:
-                pass
-            time.sleep(0.1)
-
-        LoggerFactory.get_logger().info(
-            f"Tunnel ESTABLISHED to {tunnel.peer_name} via {addr}"
-        )
-
-    def _monitor_loop(self):
-        """Background monitor for tunnel health and idle timeout"""
+    def _main_loop(self):
+        """主循环：处理所有隧道的接收、心跳、超时"""
         while self.running:
-            time.sleep(5)  # Check more frequently for better responsiveness
+            with self.lock:
+                active_tunnels = list(self.tunnels.values())
 
-            try:
-                now = time.time()
+            if not active_tunnels:
+                time.sleep(0.1)
+                continue
 
-                with self.lock:
-                    tunnels_to_check = list(self.tunnels.values())
+            current_time_ms = int(time.time() * 1000) & 0xffffffff
+            now = time.time()
 
-                for tunnel in tunnels_to_check:
-                    # Check punching timeout
-                    if tunnel.status == 'punching':
-                        punch_elapsed = now - tunnel.punch_start_time
-                        if punch_elapsed > self.punch_timeout:
-                            LoggerFactory.get_logger().warning(
-                                f"Punch timeout for {tunnel.peer_name} after {punch_elapsed:.1f}s"
-                            )
-                            # Mark as failed, don't close - let it be cleaned up
-                            tunnel.status = 'failed'
-                            if self.on_punch_failed:
-                                self.on_punch_failed(tunnel.peer_name)
-                        continue
+            read_sockets = []
+            sock_to_tunnel = {}
 
-                    # Clean up failed tunnels after 60s so they can be retried
-                    if tunnel.status == 'failed':
-                        failed_time = now - tunnel.punch_start_time
-                        if failed_time > 60:
-                            self.clear_failed_tunnel(tunnel.peer_name)
-                        continue
+            for tunnel in active_tunnels:
+                # 1. KCP Tick
+                try:
+                    with tunnel.lock:
+                        tunnel.kcp.update(current_time_ms)
+                except: pass
 
-                    if not tunnel.is_established():
-                        continue
-
-                    idle_time = now - tunnel.last_activity
-
-                    # Check keepalive response timeout
-                    if tunnel.keepalive_pending:
-                        keepalive_wait = now - tunnel.last_keepalive_sent
-                        if keepalive_wait > 5:  # 10s timeout for keepalive response
-                            tunnel.keepalive_failures += 1
-                            tunnel.keepalive_pending = False
-                            LoggerFactory.get_logger().warning(
-                                f"Keepalive timeout for {tunnel.peer_name}, "
-                                f"failures: {tunnel.keepalive_failures}/{tunnel.max_keepalive_failures}"
-                            )
-
-                            if tunnel.keepalive_failures >= tunnel.max_keepalive_failures:
-                                LoggerFactory.get_logger().error(
-                                    f"Tunnel to {tunnel.peer_name} is dead (keepalive failed)"
-                                )
-                                self.close_tunnel(tunnel.peer_name, notify_peer=True)
-                                continue
-
-                    # Send keepalive every 15s of idle time
-                    if idle_time > 10 and not tunnel.keepalive_pending:
-                        tunnel.send_keepalive()
+                # 2. 心跳保活逻辑 (按要求调整)
+                # ----------------------------------------------------
+                # 这里的 last_activity 包含收到数据、发送数据的时间
+                if now - tunnel.last_activity > 10: # 10秒空闲
+                    if not tunnel.keepalive_pending:
+                        # 发送第一次探测
+                        tunnel.send_kcp(TunnelPacket.pack_keepalive())
                         tunnel.last_keepalive_sent = now
                         tunnel.keepalive_pending = True
-                        LoggerFactory.get_logger().debug(
-                            f"Sent keepalive to {tunnel.peer_name}"
-                        )
+                        # LoggerFactory.get_logger().debug(f"Keepalive PING sent to {tunnel.peer_name}")
 
-                    # Hard timeout at 60s idle (no activity at all)
-                    if idle_time > 60:
-                        LoggerFactory.get_logger().info(
-                            f"Tunnel to {tunnel.peer_name} idle timeout"
-                        )
-                        self.close_tunnel(tunnel.peer_name)
+                    elif now - tunnel.last_keepalive_sent > 5: # 5秒没收到ACK
+                        tunnel.keepalive_fails += 1
+                        tunnel.keepalive_pending = False # 允许立即重发下一次
 
-            except Exception as e:
-                LoggerFactory.get_logger().error(f"Monitor loop error: {e}")
+                        LoggerFactory.get_logger().warn(f"Keepalive timeout for {tunnel.peer_name} ({tunnel.keepalive_fails}/2)")
+
+                        # 连续2次失败，认为断开
+                        if tunnel.keepalive_fails >= 2:
+                            LoggerFactory.get_logger().error(f"Tunnel to {tunnel.peer_name} DEAD (Heartbeat failed). Switching to WebSocket.")
+                            self._close_tunnel(tunnel)
+                            continue
+                # ----------------------------------------------------
+
+                # 兜底：如果60秒没有任何活动（包括心跳也发不出去的情况），强制关闭
+                if now - tunnel.last_activity > 60:
+                    self._close_tunnel(tunnel)
+                    continue
+
+                read_sockets.append(tunnel.socket)
+                sock_to_tunnel[tunnel.socket] = tunnel
+
+            if not read_sockets:
+                time.sleep(0.01)
+                continue
+
+            # 3. 接收数据
+            try:
+                r, _, _ = select.select(read_sockets, [], [], 0.01)
+                for sock in r:
+                    tunnel = sock_to_tunnel.get(sock)
+                    if not tunnel: continue
+
+                    try:
+                        data, addr = sock.recvfrom(65536)
+
+                        # 处理 N4 PUNCH 确认包
+                        if len(data) == 8:
+                            pun = N4Packet.dec_punch(data)
+                            if pun == tunnel.session_id:
+                                if addr != tunnel.peer_addr:
+                                    tunnel.peer_addr = addr
+                                continue
+
+                        # 收到有效业务数据或心跳包
+                        if addr != tunnel.peer_addr:
+                            tunnel.peer_addr = addr
+
+                        self._input_kcp(tunnel, data)
+                    except:
+                        pass
+            except:
+                pass
+
+    def _close_tunnel(self, tunnel):
+        tunnel.close()
+        with self.lock:
+            self.tunnels.pop(tunnel.pair_key, None)
+            # 清除 pending 标记，允许重新建立
+            if tunnel.peer_name in self.pending_punch_requests:
+                self.pending_punch_requests.remove(tunnel.peer_name)
+        if self.on_tunnel_closed:
+            self.on_tunnel_closed(tunnel.peer_name)
+
+    def _input_kcp(self, tunnel, data):
+        """将 UDP 数据输入 KCP 并取出完整包"""
+        with tunnel.lock:
+            try: tunnel.kcp.input(data)
+            except: return
+
+            tunnel.last_activity = time.time()
+
+            # 读取流
+            while True:
+                chunk = tunnel.kcp.recv()
+                if not chunk: break
+                tunnel.stream_buffer.extend(chunk)
+
+            # 解析 TunnelPacket
+            HEADER = 8
+            while len(tunnel.stream_buffer) >= HEADER:
+                payload_len = (tunnel.stream_buffer[6] << 8) | tunnel.stream_buffer[7]
+                total = HEADER + payload_len
+                if len(tunnel.stream_buffer) >= total:
+                    pkt = bytes(tunnel.stream_buffer[:total])
+                    del tunnel.stream_buffer[:total]
+                    self._handle_tunnel_packet(tunnel, pkt)
+                else:
+                    break
+
+    def _handle_tunnel_packet(self, tunnel, packet):
+        """处理解包后的数据"""
+        try:
+            res = TunnelPacket.unpack(packet)
+            if not res: return
+
+            pkt_type, flags, uid, payload = res
+
+            if pkt_type == TunnelPacket.TYPE_DATA:
+                if uid not in self.uid_to_peer:
+                    self.register_uid(uid, tunnel.peer_name)
+                if self.on_data_received:
+                    self.on_data_received(uid, payload)
+
+            elif pkt_type == TunnelPacket.TYPE_KEEPALIVE:
+                tunnel.send_kcp(TunnelPacket.pack_keepalive_ack())
+
+            elif pkt_type == TunnelPacket.TYPE_KEEPALIVE_ACK:
+                tunnel.keepalive_pending = False
+                tunnel.keepalive_fails = 0
+                if not tunnel.verified:
+                    tunnel.verified = True
+                    LoggerFactory.get_logger().info(f"Tunnel to {tunnel.peer_name} VERIFIED (Ready for P2P)")
+
+            elif pkt_type == TunnelPacket.TYPE_CLOSE_UID:
+                self.unregister_uid(uid)
+
+            elif pkt_type == TunnelPacket.TYPE_TUNNEL_CLOSE:
+                self._close_tunnel(tunnel)
+
+        except:
+            pass
