@@ -233,7 +233,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     client_name = push_config['client_name']
                     self.version = push_config.get('version')
 
-                    self.p2p_supported = push_config.get('p2p_supported', False)
+                    # self.p2p_supported = push_config.get('p2p_supported', False)
+                    self.p2p_supported = False
                     if self.p2p_supported:
                         LoggerFactory.get_logger().info(f'Client {client_name} supports P2P, public address: {self.public_ip}:{self.public_port}')
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
@@ -300,7 +301,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 'local_ip': rule['local_ip'],
                                 'protocol': rule['protocol'],
                                 'speed_limit': rule.get('speed_limit', 0.0),
-                                'p2p_enabled': rule.get('p2p_enabled', True)
+                                # 'p2p_enabled': rule.get('p2p_enabled', True)
+                                'p2p_enabled': False
                             }
                             if 'target_ip' in rule and 'target_port' in rule:
                                 client_rule['target_ip'] = rule['target_ip']
@@ -416,7 +418,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol, ip_port)
 
                 # Try P2P if both clients support it AND rule allows it (only for TCP)
-                rule_p2p_enabled = rule.get('p2p_enabled', True)
+                rule_p2p_enabled = False
+                # rule_p2p_enabled = rule.get('p2p_enabled', True)
                 if (protocol == 'tcp' and rule_p2p_enabled and
                         self.p2p_supported and target_handler.p2p_supported):
                     # Initiate P2P punch via N4 Signal Service

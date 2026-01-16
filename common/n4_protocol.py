@@ -120,6 +120,11 @@ class N4Packet:
             return None
         return ident
 
+    @staticmethod
+    def is_n4_packet(data: bytes) -> bool:
+        """Check if data is an N4 protocol packet (8 bytes, cmd 0x01-0x05)"""
+        return len(data) == N4Packet.SIZE and data[0] in (0x01, 0x02, 0x03, 0x04, 0x05)
+
 
 class N4Error:
     """N4 Error types"""

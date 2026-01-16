@@ -29,7 +29,8 @@ class MessageSender:
     def __init__(self, ws):
         # Dual priority queues
         self.high_priority_queue = queue.Queue(maxsize=64)     # High priority: control messages
-        self.normal_queue = queue.Queue(maxsize=1024)          # Normal priority: business data
+        # self.normal_queue = queue.Queue(maxsize=1024)          # Normal priority: business data
+        self.normal_queue = queue.Queue(maxsize=256)          # Normal priority: business data
         self.ws = ws
         self.running = False
         self.sender_thread = threading.Thread(target=self.send_messages)
@@ -138,6 +139,10 @@ class TcpForwardClient:
         self.lock = Lock()
         self.socket_event_loop = SelectPool()
 
+        # 新增：全局消息发送器，所有 UID 共享
+        self.global_sender = MessageSender(ws)
+        self.global_sender.start()
+
         # C2C client-to-client forward state
         self.c2c_rules: List[dict] = []                     # C2C rules list
         self.c2c_listeners: Dict[str, socket.socket] = {}   # rule_name → listener socket
@@ -156,8 +161,8 @@ class TcpForwardClient:
         self.socket_event_loop.is_running = running
 
     def update_websocket(self, ws):
-        """Update websocket connection reference (for client reconnection)"""
         self.ws = ws
+        self.global_sender.ws = ws # 同时更新 sender 的引用
         LoggerFactory.get_logger().info('TCP forward client websocket reference updated')
 
     def start_forward(self):
@@ -260,6 +265,7 @@ class TcpForwardClient:
                     'protocol': protocol
                 }
 
+
                 # Add target_ip and target_port for direct mode, or target_service for service mode
                 if use_direct_mode:
                     forward_data['target_ip'] = rule['target_ip']
@@ -271,13 +277,12 @@ class TcpForwardClient:
                     'type_': MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD,
                     'data': forward_data
                 }
-                self.ws.send(
-                    NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support),
-                    websocket.ABNF.OPCODE_BINARY
-                )
-                LoggerFactory.get_logger().info(f'C2C forward request sent: {rule_name} UID: {uid.hex()}')
+                msg_bytes = NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support)
+                self.global_sender.enqueue_message(msg_bytes, high_priority=True)
 
+                LoggerFactory.get_logger().info(f'C2C forward request sent (High Priority): {rule_name} UID: {uid.hex()}')
                 # Register to event loop, start forwarding data
+
                 speed_limiter = SpeedLimiter(speed_limit) if speed_limit > 0 else None
                 self.socket_event_loop.register(client_socket, ResisterAppendData(self.handle_message, speed_limiter))
 
@@ -325,11 +330,12 @@ class TcpForwardClient:
                 'ip_port': ''
             }
         }
+        msg_bytes = NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
 
-        connection.sender.enqueue_message(
-            NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
-        )
-
+        self.global_sender.enqueue_message(msg_bytes, high_priority=False)
+        # connection.sender.enqueue_message(
+        #     NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
+        # )
         if not recv:
             try:
                 self.close_connection(each)
@@ -372,7 +378,9 @@ class TcpForwardClient:
                             'ip_port': ip_port
                         }
                     }
-                    self.ws.send(NatSerialization.dumps(confirm_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+                    # self.ws.send(NatSerialization.dumps(confirm_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+                    msg_bytes = NatSerialization.dumps(confirm_message, ContextUtils.get_password(), self.compress_support)
+                    self.global_sender.enqueue_message(msg_bytes, high_priority=True)
                     if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                         LoggerFactory.get_logger().debug(f'Connection confirmation message sent uid: {uid}')
 
@@ -390,7 +398,9 @@ class TcpForwardClient:
                         }
                     }
                     try:
-                        self.ws.send(NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+                        msg_bytes = NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support)
+                        self.global_sender.enqueue_message(msg_bytes, high_priority=True)
+                        # self.ws.send(NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
                     except Exception as send_err:
                         LoggerFactory.get_logger().error(f'Failed to send connection failure message: {send_err}')
 
