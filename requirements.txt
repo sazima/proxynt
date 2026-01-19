@@ -1,5 +1,6 @@
 tornado
 typing_extensions
 pytz
-uvloop>=0.14.0  # 性能提升 20-30%
+uvloop>=0.14.0; sys_platform != "win32"  # Linux/macOS 性能提升 20-30%
+winloop>=0.1.0; sys_platform == "win32"  # Windows 性能提升 20-30%
 xxhash>=3.0.0   # 快速哈希算法（签名速度提升 10 倍）

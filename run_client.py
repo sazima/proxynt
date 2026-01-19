@@ -16,13 +16,23 @@ from urllib.parse import urlparse
 import tornado
 from tornado import ioloop
 
-# Try to enable uvloop for performance boost
-try:
-    import uvloop
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    _UVLOOP_ENABLED = True
-except ImportError:
-    _UVLOOP_ENABLED = False
+# Try to enable high-performance event loop (20-30% boost)
+# Use winloop on Windows, uvloop on Linux/macOS
+_UVLOOP_ENABLED = False
+if sys.platform == 'win32':
+    try:
+        import winloop
+        asyncio.set_event_loop_policy(winloop.EventLoopPolicy())
+        _UVLOOP_ENABLED = True
+    except ImportError:
+        pass
+else:
+    try:
+        import uvloop
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        _UVLOOP_ENABLED = True
+    except ImportError:
+        pass
 
 try:
     import snappy
@@ -460,7 +470,7 @@ def run_client(ws: websocket.WebSocketApp):
 def main():
     print('github: ', SystemConstant.GITHUB)
     if _UVLOOP_ENABLED:
-        print('uvloop enabled')
+        print('high-performance event loop enabled (uvloop/winloop)')
 
     from common.encrypt_utils import EncryptUtils
     if not EncryptUtils.is_xxhash_available():

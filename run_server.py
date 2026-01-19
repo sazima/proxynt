@@ -10,13 +10,23 @@ from threading import Thread
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Try to enable uvloop for performance boost (20-30%)
-try:
-    import uvloop
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    _UVLOOP_ENABLED = True
-except ImportError:
-    _UVLOOP_ENABLED = False
+# Try to enable high-performance event loop (20-30% boost)
+# Use winloop on Windows, uvloop on Linux/macOS
+_UVLOOP_ENABLED = False
+if sys.platform == 'win32':
+    try:
+        import winloop
+        asyncio.set_event_loop_policy(winloop.EventLoopPolicy())
+        _UVLOOP_ENABLED = True
+    except ImportError:
+        pass
+else:
+    try:
+        import uvloop
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        _UVLOOP_ENABLED = True
+    except ImportError:
+        pass
 
 import tornado.ioloop
 import tornado.web
@@ -104,7 +114,7 @@ def signal_handler(sig, frame):
 def main():
     print('github: ', SystemConstant.GITHUB)
     if _UVLOOP_ENABLED:
-        print('uvloop enabled')
+        print('high-performance event loop enabled (uvloop/winloop)')
 
     # Check if xxhash is available
     from common.encrypt_utils import EncryptUtils
