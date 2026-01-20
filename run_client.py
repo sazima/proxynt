@@ -49,6 +49,7 @@ from client.udp_forward_client import UdpForwardClient
 from client.heart_beat_task import HeatBeatTask
 from client.tcp_forward_client import TcpForwardClient
 from client.n4_tunnel_manager import N4TunnelManager, get_pair_key
+from client.data_connection_manager import DataConnectionManager
 from common import websocket
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
@@ -151,6 +152,19 @@ class WebsocketClient:
         self.public_ip: str = None
         self.public_port: int = None
 
+        # 多连接支持
+        self.multi_connection_enabled: bool = config_data.get('multi_connection', True)
+        self.num_data_channels: int = config_data.get('num_data_channels', 4)
+        server_url = config_data['server']['url']
+        if self.compress_support:
+            sep = '&' if '?' in server_url else '?'
+            server_url += sep + 'c=' + json.dumps(self.compress_support)
+        self.data_conn_manager: DataConnectionManager = DataConnectionManager(
+            server_url=server_url,
+            compress_support=self.compress_support,
+            on_message_callback=self._on_data_connection_message
+        )
+
         # Get server info for N4 signaling
         server_url = config_data['server']['url']
         parsed = urlparse(server_url)
@@ -239,6 +253,20 @@ class WebsocketClient:
                 for d in push_config['config_list']:
                     if d.get('speed_limit'):
                         name_to_speed_limiter[d['name']] = SpeedLimiter(d['speed_limit'])
+
+                # 多连接支持：如果服务端返回了 session_token，建立数据连接
+                session_token = push_config.get('session_token')
+                if session_token and self.multi_connection_enabled:
+                    LoggerFactory.get_logger().info(
+                        f'Multi-connection enabled, establishing {self.num_data_channels} data connections'
+                    )
+                    self.data_conn_manager.setup_data_connections(
+                        session_token=session_token,
+                        num_channels=self.num_data_channels
+                    )
+                    # 将 DataConnectionManager 注入到 forward_client
+                    self.forward_client.data_conn_manager = self.data_conn_manager
+                    self.udp_forward_client.data_conn_manager = self.data_conn_manager
 
                 # Setup Listeners
                 c2c_rules = push_config.get('client_to_client_rules', [])
@@ -332,6 +360,52 @@ class WebsocketClient:
         # Start hole punching with peer info
         self.tunnel_manager.receive_peer_info(peer_name, peer_ip, peer_port)
 
+    def _on_data_connection_message(self, message_data: MessageEntity):
+        """处理数据连接收到的消息（和控制连接消息处理逻辑相同）"""
+        try:
+            msg_type = message_data['type_']
+
+            # Handle TCP messages
+            if msg_type == MessageTypeConstant.WEBSOCKET_OVER_TCP:
+                data: TcpOverWebsocketMessage = message_data['data']
+                uid = data['uid']
+                name = data['name']
+                b = data['data']
+
+                create_result = self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
+                if create_result:
+                    self.forward_client.send_by_uid(uid, b)
+
+            # Handle UDP messages
+            elif msg_type == MessageTypeConstant.WEBSOCKET_OVER_UDP:
+                data: TcpOverWebsocketMessage = message_data['data']
+                uid = data['uid']
+                name = data['name']
+                b = data['data']
+                create_result = self.udp_forward_client.create_udp_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
+                if create_result:
+                    self.udp_forward_client.send_by_uid(uid, b)
+
+            # Handle connection confirmed/failed (for C2C)
+            elif msg_type == MessageTypeConstant.CONNECT_CONFIRMED:
+                data: TcpOverWebsocketMessage = message_data['data']
+                uid = data['uid']
+                # C2C 连接确认，暂无特殊处理
+                LoggerFactory.get_logger().debug(f'C2C connection confirmed: {uid.hex()}')
+
+            elif msg_type == MessageTypeConstant.CONNECT_FAILED:
+                data: TcpOverWebsocketMessage = message_data['data']
+                uid = data['uid']
+                LoggerFactory.get_logger().info(f'C2C connection failed: {uid.hex()}')
+                # 关闭本地连接
+                conn = self.forward_client.uid_to_socket_connection.get(uid)
+                if conn:
+                    self.forward_client.close_connection(conn.socket)
+
+        except Exception as e:
+            LoggerFactory.get_logger().error(f'Data connection message handling error: {e}')
+            LoggerFactory.get_logger().error(traceback.format_exc())
+
     def _on_p2p_data_received(self, uid: bytes, data: bytes):
         """Callback when data comes from P2P Tunnel"""
         self.forward_client.send_by_uid(uid, data)
@@ -397,6 +471,10 @@ class WebsocketClient:
                 self.forward_client.close()
                 self.udp_forward_client.close()
 
+                # Stop data connections (will be re-established after PUSH_CONFIG response)
+                if self.data_conn_manager:
+                    self.data_conn_manager.stop_all()
+
                 # Restart tunnel manager
                 if self.tunnel_manager:
                     self.tunnel_manager.stop()
@@ -418,7 +496,9 @@ class WebsocketClient:
                     'config_list': push_client_data,
                     "client_name": client_name,
                     'version': SystemConstant.VERSION,
-                    'p2p_supported': True
+                    'p2p_supported': True,
+                    'multi_connection': self.multi_connection_enabled,
+                    'num_data_channels': self.num_data_channels
                 }
                 message: MessageEntity = {
                     'type_': MessageTypeConstant.PUSH_CONFIG,
@@ -442,6 +522,9 @@ class WebsocketClient:
             LoggerFactory.get_logger().info(f'WS Closed: {a}, {b}')
             self.heart_beat_task.is_running = False
             self.forward_client.close()
+            # Stop data connections
+            if self.data_conn_manager:
+                self.data_conn_manager.stop_all()
             # Stop tunnel manager
             if self.tunnel_manager:
                 self.tunnel_manager.stop()

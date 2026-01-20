@@ -21,6 +21,7 @@ from common.speed_limit import SpeedLimiter
 from constant.message_type_constnat import MessageTypeConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
+from server.session_manager import SessionManager
 
 
 class PublicSocketServer:
@@ -126,14 +127,8 @@ class TcpForwardClient:
     def handle_message(self, each: socket.socket, data: ResisterAppendData):
         # 发送到websocket
         each: socket.socket
-        if data.speed_limiter and data.speed_limiter.is_exceed()[0]:
-            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug('over speed')
-            self.socket_event_loop.unregister_and_register_delay(each, data, 1)
         try:
             recv = each.recv(data.read_size)
-            if data.speed_limiter:
-                data.speed_limiter.add(len(recv))
         except ConnectionResetError:
             recv = b''
         # client = self.uid_to_client[uid]
@@ -174,9 +169,22 @@ class TcpForwardClient:
             except (OSError, ValueError, KeyError):
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
         try:
-            is_compress = socket_connection.socket_server.websocket_handler.compress_support
+            # 发送端限速：在发送前等待
+            if data.speed_limiter and recv:
+                wait_time = data.speed_limiter.acquire(len(recv))
+                if wait_time > 0:
+                    time.sleep(wait_time)
+
+            # 使用多连接：根据 UID 选择数据通道
+            control_handler = socket_connection.socket_server.websocket_handler
+            session = SessionManager.get_instance().get_session_by_handler(control_handler)
+            if session:
+                target_handler = session.get_data_handler(socket_connection.uid)
+            else:
+                target_handler = control_handler
+            is_compress = target_handler.compress_support
             self.tornado_loop.add_callback(
-                partial(socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress)), True)
+                partial(target_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress)), True)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 

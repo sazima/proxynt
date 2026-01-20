@@ -9,6 +9,7 @@ from json import JSONDecodeError
 from typing import List, Dict, Set, Tuple
 
 from server.udp_forward_client import UdpForwardClient
+from server.session_manager import SessionManager
 
 try:
     import snappy
@@ -47,6 +48,10 @@ class MyWebSocketaHandler(WebSocketHandler):
     p2p_supported: bool = False  # Whether client supports P2P
     public_ip: str = None        # Client's public IP
     public_port: int = None      # Client's public port (WebSocket connection port)
+
+    # 多连接支持
+    is_data_connection: bool = False  # 是否是数据连接
+    channel_index: int = -1           # 数据通道索引（-1 表示控制连接）
 
     client_name_to_handler: Dict[str, 'MyWebSocketaHandler'] = {}
     lock: Lock
@@ -135,27 +140,44 @@ class MyWebSocketaHandler(WebSocketHandler):
                 if not is_c2c:
                     conn = tcp_forward_client.uid_to_connection.get(uid)
                     if not conn or conn.socket_server.websocket_handler != self:
-                        LoggerFactory.get_logger().warning(f"Security Alert: Client {self.client_name} tried to inject TCP data to UID {uid.hex()} belonging to another client/session.")
+                        LoggerFactory.get_logger().debug(f"Security Alert: Client {self.client_name} tried to inject TCP data to UID {uid.hex()} belonging to another client/session.")
                         return
-
                 if is_c2c:
                     source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
+                    session_manager = SessionManager.get_instance()
 
-                    if self == source_handler:
+                    # 判断发送方是源客户端还是目标客户端（支持多连接）
+                    source_session = session_manager.get_session_by_handler(source_handler)
+                    target_session = session_manager.get_session_by_handler(target_handler)
+                    my_session = session_manager.get_session_by_handler(self)
+
+                    is_from_source = (self == source_handler or
+                                      (my_session and source_session and my_session.client_name == source_session.client_name))
+                    is_from_target = (self == target_handler or
+                                      (my_session and target_session and my_session.client_name == target_session.client_name))
+
+                    if is_from_source:
+                        # 转发到目标客户端，使用 get_data_handler 选择数据通道
+                        if target_session:
+                            actual_target = target_session.get_data_handler(uid)
+                        else:
+                            actual_target = target_handler
+
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
-                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
-                            await target_handler.write_message(message, binary=True)
+                        await actual_target.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(), actual_target.compress_support),
+                            binary=True
+                        )
+                    elif is_from_target:
+                        # 转发到源客户端，使用 get_data_handler 选择数据通道
+                        if source_session:
+                            actual_source = source_session.get_data_handler(uid)
                         else:
-                            await target_handler.write_message(
-                                NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                       target_handler.compress_support),
-                                binary=True
-                            )
-                    elif self == target_handler:
-                        await source_handler.write_message(
-                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support),
+                            actual_source = source_handler
+
+                        await actual_source.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(), actual_source.compress_support),
                             binary=True
                         )
 
@@ -187,22 +209,40 @@ class MyWebSocketaHandler(WebSocketHandler):
 
                 if is_c2c:
                     source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
+                    session_manager = SessionManager.get_instance()
 
-                    if self == source_handler:
+                    # 判断发送方是源客户端还是目标客户端（支持多连接）
+                    source_session = session_manager.get_session_by_handler(source_handler)
+                    target_session = session_manager.get_session_by_handler(target_handler)
+                    my_session = session_manager.get_session_by_handler(self)
+
+                    is_from_source = (self == source_handler or
+                                      (my_session and source_session and my_session.client_name == source_session.client_name))
+                    is_from_target = (self == target_handler or
+                                      (my_session and target_session and my_session.client_name == target_session.client_name))
+
+                    if is_from_source:
+                        # 转发到目标客户端，使用 get_data_handler 选择数据通道
+                        if target_session:
+                            actual_target = target_session.get_data_handler(uid)
+                        else:
+                            actual_target = target_handler
+
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
-                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
-                            await target_handler.write_message(message, binary=True)
+                        await actual_target.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(), actual_target.compress_support),
+                            binary=True
+                        )
+                    elif is_from_target:
+                        # 转发到源客户端，使用 get_data_handler 选择数据通道
+                        if source_session:
+                            actual_source = source_session.get_data_handler(uid)
                         else:
-                            await target_handler.write_message(
-                                NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                       target_handler.compress_support),
-                                binary=True
-                            )
-                    elif self == target_handler:
-                        await source_handler.write_message(
-                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support),
+                            actual_source = source_handler
+
+                        await actual_source.write_message(
+                            NatSerialization.dumps(message_dict, ContextUtils.get_password(), actual_source.compress_support),
                             binary=True
                         )
                 else:
@@ -233,12 +273,19 @@ class MyWebSocketaHandler(WebSocketHandler):
                     client_name = push_config['client_name']
                     self.version = push_config.get('version')
 
+                    # 多连接支持
+                    is_multi_connection = push_config.get('multi_connection', False)
+                    num_data_channels = push_config.get('num_data_channels', 4)
+
                     # self.p2p_supported = push_config.get('p2p_supported', False)
                     self.p2p_supported = False
                     if self.p2p_supported:
                         LoggerFactory.get_logger().info(f'Client {client_name} supports P2P, public address: {self.public_ip}:{self.public_port}')
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
-                    if client_name in self.client_name_to_handler:
+
+                    # 检查重名（同时检查 client_name_to_handler 和 SessionManager）
+                    session_manager = SessionManager.get_instance()
+                    if client_name in self.client_name_to_handler or session_manager.client_name_exists(client_name):
                         self.close(None, 'DuplicatedClientName')
                         raise DuplicatedName()
                     data: List[ClientData] = push_config['config_list']
@@ -289,6 +336,27 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.client_name_to_handler[client_name] = self
                     self.push_config = push_config
 
+                    # 创建 Session（多连接支持）
+                    session = session_manager.create_session(
+                        client_name=client_name,
+                        control_handler=self,
+                        is_multi_connection=is_multi_connection,
+                        compress_support=self.compress_support,
+                        num_data_channels=num_data_channels
+                    )
+                    if not session:
+                        # 创建失败（理论上不应该发生，因为前面已经检查过重名）
+                        self.close(None, 'SessionCreationFailed')
+                        raise DuplicatedName()
+
+                    # 如果是多连接模式，将 session_token 加入响应
+                    if is_multi_connection:
+                        message_dict['data']['session_token'] = session.session_token.hex()
+                        LoggerFactory.get_logger().info(
+                            f'Multi-connection enabled for {client_name}, '
+                            f'num_data_channels={num_data_channels}'
+                        )
+
                     # 推送此客户端相关的 C2C 规则
                     c2c_rules = ContextUtils.get_c2c_rules()
                     client_c2c_rules = []
@@ -321,16 +389,79 @@ class MyWebSocketaHandler(WebSocketHandler):
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.recv_time = time.time()
 
+            elif message_dict['type_'] == MessageTypeConstant.JOIN_SESSION:
+                # 数据连接加入会话
+                data = message_dict['data']
+                session_token_hex = data.get('session_token')
+                channel_index = data.get('channel_index', 0)
+
+                if not session_token_hex:
+                    LoggerFactory.get_logger().warning('JOIN_SESSION: missing session_token')
+                    self.close(None, 'MissingSessionToken')
+                    return
+
+                try:
+                    session_token = bytes.fromhex(session_token_hex)
+                except ValueError:
+                    LoggerFactory.get_logger().warning(f'JOIN_SESSION: invalid session_token format')
+                    self.close(None, 'InvalidSessionToken')
+                    return
+
+                session_manager = SessionManager.get_instance()
+                session = session_manager.join_session(session_token, self, channel_index)
+
+                if not session:
+                    LoggerFactory.get_logger().warning(f'JOIN_SESSION: invalid or expired token')
+                    self.close(None, 'InvalidSessionToken')
+                    return
+
+                # 标记为数据连接
+                self.is_data_connection = True
+                self.channel_index = channel_index
+                self.client_name = session.client_name
+                self.compress_support = session.compress_support
+
+                # 发送确认响应
+                response: MessageEntity = {
+                    'type_': MessageTypeConstant.JOIN_SESSION,
+                    'data': {
+                        'success': True,
+                        'channel_index': channel_index
+                    }
+                }
+                await self.write_message(
+                    NatSerialization.dumps(response, ContextUtils.get_password(), self.compress_support),
+                    binary=True
+                )
+                LoggerFactory.get_logger().info(
+                    f'Data connection joined session: {session.client_name}, channel={channel_index}'
+                )
+
             elif message_dict['type_'] == MessageTypeConstant.CONNECT_CONFIRMED:
                 data: TcpOverWebsocketMessage = message_dict['data']
                 uid = data['uid']
 
                 if uid in self.c2c_uid_to_routing:
                     source_handler, target_handler, rule_name, protocol, _ = self.c2c_uid_to_routing[uid]
-                    if self == target_handler:
-                        await source_handler.write_message(
+                    session_manager = SessionManager.get_instance()
+
+                    # 判断是否来自目标客户端（支持多连接）
+                    target_session = session_manager.get_session_by_handler(target_handler)
+                    my_session = session_manager.get_session_by_handler(self)
+                    is_from_target = (self == target_handler or
+                                      (my_session and target_session and my_session.client_name == target_session.client_name))
+
+                    if is_from_target:
+                        # 转发到源客户端，使用 get_data_handler 选择数据通道
+                        source_session = session_manager.get_session_by_handler(source_handler)
+                        if source_session:
+                            actual_source = source_session.get_data_handler(uid)
+                        else:
+                            actual_source = source_handler
+
+                        await actual_source.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support),
+                                                   actual_source.compress_support),
                             binary=True
                         )
                 elif uid in tcp_forward_client.uid_to_connection:
@@ -358,10 +489,25 @@ class MyWebSocketaHandler(WebSocketHandler):
 
                 if uid in self.c2c_uid_to_routing:
                     source_handler, target_handler, rule_name, protocol, _ = self.c2c_uid_to_routing[uid]
-                    if self == target_handler:
-                        await source_handler.write_message(
+                    session_manager = SessionManager.get_instance()
+
+                    # 判断是否来自目标客户端（支持多连接）
+                    target_session = session_manager.get_session_by_handler(target_handler)
+                    my_session = session_manager.get_session_by_handler(self)
+                    is_from_target = (self == target_handler or
+                                      (my_session and target_session and my_session.client_name == target_session.client_name))
+
+                    if is_from_target:
+                        # 转发到源客户端，使用 get_data_handler 选择数据通道
+                        source_session = session_manager.get_session_by_handler(source_handler)
+                        if source_session:
+                            actual_source = source_session.get_data_handler(uid)
+                        else:
+                            actual_source = source_handler
+
+                        await actual_source.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support),
+                                                   actual_source.compress_support),
                             binary=True
                         )
                     async with self.c2c_lock:
@@ -517,6 +663,20 @@ class MyWebSocketaHandler(WebSocketHandler):
         LoggerFactory.get_logger().info(f'Closing connection {self.client_name}, code: {code}, reason: {reason}')
         try:
             async with self.lock:
+                # 使用 SessionManager 处理连接关闭
+                session_manager = SessionManager.get_instance()
+                removed_client = session_manager.remove_handler(self)
+
+                if removed_client:
+                    # 控制连接断开，整个会话失效
+                    LoggerFactory.get_logger().info(f'Control connection closed for {removed_client}')
+                elif self.is_data_connection:
+                    # 数据连接断开，只是移除该数据通道
+                    LoggerFactory.get_logger().info(
+                        f'Data connection {self.channel_index} closed for {self.client_name}'
+                    )
+                    return  # 数据连接断开不需要清理其他资源
+
                 if self.client_name:
                     if self.client_name in self.client_name_to_handler:
                         self.client_name_to_handler.pop(self.client_name)

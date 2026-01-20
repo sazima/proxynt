@@ -146,6 +146,9 @@ class TcpForwardClient:
         # N4 Tunnel Manager for P2P data transfer
         self.tunnel_manager = None
 
+        # 多连接支持：DataConnectionManager（由 run_client 注入）
+        self.data_conn_manager = None
+
         # Pending data buffer: uid -> list of (data, timestamp)
         # Used to buffer P2P data that arrives before connection is established
         self.pending_data: Dict[bytes, list] = {}
@@ -295,14 +298,8 @@ class TcpForwardClient:
         if not connection:
             return
 
-        if data.speed_limiter and data.speed_limiter.is_exceed()[0]:
-            self.socket_event_loop.unregister_and_register_delay(each, data, 1)
-            return
-
         try:
             recv = each.recv(data.read_size)
-            if data.speed_limiter:
-                data.speed_limiter.add(len(recv))
         except OSError:
             recv = b''
 
@@ -311,11 +308,11 @@ class TcpForwardClient:
             # 尝试走 P2P 隧道
             if self.tunnel_manager.send_data(connection.uid, recv):
                 # 如果发送成功返回 True，逻辑结束
-                if not recv: # 本地连接关闭，通知隧道
+                if not recv:  # 本地连接关闭，通知隧道
                     self.close_connection(each)
                 return
 
-                # --- 回退/初始逻辑：走 WebSocket ---
+        # --- 回退/初始逻辑：走 WebSocket ---
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
@@ -326,9 +323,21 @@ class TcpForwardClient:
             }
         }
 
-        connection.sender.enqueue_message(
-            NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
-        )
+        # 发送端限速：在发送前等待
+        if data.speed_limiter and recv:
+            wait_time = data.speed_limiter.acquire(len(recv))
+            if wait_time > 0:
+                time.sleep(wait_time)
+
+        # 多连接模式：优先使用数据连接
+        message_bytes = NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
+        if self.data_conn_manager and self.data_conn_manager.is_ready():
+            if not self.data_conn_manager.send_by_uid(connection.uid, message_bytes):
+                # 数据连接发送失败，回退到控制连接
+                connection.sender.enqueue_message(message_bytes)
+        else:
+            # 单连接模式：使用控制连接
+            connection.sender.enqueue_message(message_bytes)
 
         if not recv:
             try:
@@ -487,7 +496,16 @@ class TcpForwardClient:
             }
         }
         start_time = time.time()
-        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+        message_bytes = NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
+
+        # 多连接模式：优先使用数据连接
+        if self.data_conn_manager and self.data_conn_manager.is_ready():
+            if not self.data_conn_manager.send_by_uid(connection.uid, message_bytes):
+                # 数据连接发送失败，回退到控制连接
+                self.ws.send(message_bytes, websocket.ABNF.OPCODE_BINARY)
+        else:
+            # 单连接模式
+            self.ws.send(message_bytes, websocket.ABNF.OPCODE_BINARY)
         LoggerFactory.get_logger().debug(f'Send to websocket cost time {time.time() - start_time}')
 
     def send_by_uid(self, uid: bytes, msg: bytes):

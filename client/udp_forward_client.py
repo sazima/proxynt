@@ -53,6 +53,9 @@ class UdpForwardClient:
         self.c2c_listeners: Dict[str, socket.socket] = {}   # rule_name → listener socket
         self.c2c_uid_to_rule: Dict[bytes, str] = {}         # UID → rule_name
 
+        # 多连接支持：DataConnectionManager（由 run_client 注入）
+        self.data_conn_manager = None
+
     def set_running(self, running: bool):
         """Set running state"""
         self.running = running
@@ -131,6 +134,9 @@ class UdpForwardClient:
         protocol = rule['protocol']
         speed_limit = rule.get('speed_limit', 0.0)
 
+        # 创建限速器
+        speed_limiter = SpeedLimiter(speed_limit) if speed_limit > 0 else None
+
         # Check if using direct mode (target_ip + target_port) or service mode (target_service)
         use_direct_mode = 'target_ip' in rule and 'target_port' in rule
 
@@ -205,10 +211,22 @@ class UdpForwardClient:
                         'ip_port': f"{source_addr[0]}:{source_addr[1]}"
                     }
                 }
-                self.ws.send(
-                    NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support),
-                    websocket.ABNF.OPCODE_BINARY
-                )
+
+                # 发送端限速：在发送前等待
+                if speed_limiter and data:
+                    wait_time = speed_limiter.acquire(len(data))
+                    if wait_time > 0:
+                        time.sleep(wait_time)
+
+                message_bytes = NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
+                # 多连接模式：优先使用数据连接
+                if self.data_conn_manager and self.data_conn_manager.is_ready():
+                    if not self.data_conn_manager.send_by_uid(uid, message_bytes):
+                        # 数据连接发送失败，回退到控制连接
+                        self.ws.send(message_bytes, websocket.ABNF.OPCODE_BINARY)
+                else:
+                    # 单连接模式
+                    self.ws.send(message_bytes, websocket.ABNF.OPCODE_BINARY)
                 LoggerFactory.get_logger().debug(f'C2C UDP data forwarded: {rule_name} UID: {uid.hex()}, len: {len(data)}')
 
             except OSError as e:
@@ -246,15 +264,6 @@ class UdpForwardClient:
 
     def _handle_udp_data(self, conn: UdpSocketConnection, data: bytes, addr):
         """Handle received UDP data"""
-        # Speed limit handling
-        if conn.speed_limiter and conn.speed_limiter.is_exceed()[0]:
-            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug('UDP speed limit exceeded')
-            return
-
-        if conn.speed_limiter:
-            conn.speed_limiter.add(len(data))
-
         # Construct UDP message and send to public server via WebSocket
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_UDP,
@@ -270,7 +279,21 @@ class UdpForwardClient:
             LoggerFactory.get_logger().debug(f'Sending UDP to WebSocket, uid: {conn.uid}, len: {len(data)}')
 
         try:
-            self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+            # 发送端限速：在发送前等待
+            if conn.speed_limiter and data:
+                wait_time = conn.speed_limiter.acquire(len(data))
+                if wait_time > 0:
+                    time.sleep(wait_time)
+
+            message_bytes = NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
+            # 多连接模式：优先使用数据连接
+            if self.data_conn_manager and self.data_conn_manager.is_ready():
+                if not self.data_conn_manager.send_by_uid(conn.uid, message_bytes):
+                    # 数据连接发送失败，回退到控制连接
+                    self.ws.send(message_bytes, websocket.ABNF.OPCODE_BINARY)
+            else:
+                # 单连接模式
+                self.ws.send(message_bytes, websocket.ABNF.OPCODE_BINARY)
         except Exception as e:
             LoggerFactory.get_logger().error(f"Failed to send UDP to WebSocket: {e}")
 

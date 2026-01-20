@@ -17,6 +17,7 @@ from common.speed_limit import SpeedLimiter
 from constant.message_type_constnat import MessageTypeConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
+from server.session_manager import SessionManager
 
 
 class UdpEndpoint:
@@ -203,14 +204,11 @@ class UdpForwardClient:
 
         uid = server.add_endpoint(address)
 
-        # Apply speed limit
-        if server.speed_limiter and server.speed_limiter.is_exceed()[0]:
-            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug('UDP speed limit reached')
-            return
-
-        if server.speed_limiter:
-            server.speed_limiter.add(len(data))
+        # 发送端限速：在发送前等待
+        if server.speed_limiter and data:
+            wait_time = server.speed_limiter.acquire(len(data))
+            if wait_time > 0:
+                time.sleep(wait_time)
 
         # Construct a UDP message and forward it to the internal client via WebSocket
         send_message: MessageEntity = {
@@ -226,10 +224,16 @@ class UdpForwardClient:
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f"Send UDP data to WebSocket, uid: {uid}, len: {len(data)}")
 
-        # Schedule WebSocket send operation in the async loop
-        is_compress = server.websocket_handler.compress_support
+        # 使用多连接：根据 UID 选择数据通道
+        control_handler = server.websocket_handler
+        session = SessionManager.get_instance().get_session_by_handler(control_handler)
+        if session:
+            target_handler = session.get_data_handler(uid)
+        else:
+            target_handler = control_handler
+        is_compress = target_handler.compress_support
         self.tornado_loop.add_callback(
-            partial(server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress)), True)
+            partial(target_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress)), True)
 
     async def register_udp_server(self, port: int, name: str, ip_port: str, websocket_handler, speed_limit_size: float):
         """Register a UDP server"""
