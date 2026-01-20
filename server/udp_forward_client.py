@@ -203,14 +203,11 @@ class UdpForwardClient:
 
         uid = server.add_endpoint(address)
 
-        # Apply speed limit
-        if server.speed_limiter and server.speed_limiter.is_exceed()[0]:
-            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug('UDP speed limit reached')
-            return
-
-        if server.speed_limiter:
-            server.speed_limiter.add(len(data))
+        # --- 发送端限速：在发送前等待 ---
+        if server.speed_limiter and data:
+            wait_time = server.speed_limiter.acquire(len(data))
+            if wait_time > 0:
+                time.sleep(wait_time)
 
         # Construct a UDP message and forward it to the internal client via WebSocket
         send_message: MessageEntity = {

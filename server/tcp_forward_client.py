@@ -126,14 +126,8 @@ class TcpForwardClient:
     def handle_message(self, each: socket.socket, data: ResisterAppendData):
         # 发送到websocket
         each: socket.socket
-        if data.speed_limiter and data.speed_limiter.is_exceed()[0]:
-            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug('over speed')
-            self.socket_event_loop.unregister_and_register_delay(each, data, 1)
         try:
             recv = each.recv(data.read_size)
-            if data.speed_limiter:
-                data.speed_limiter.add(len(recv))
         except ConnectionResetError:
             recv = b''
         # client = self.uid_to_client[uid]
@@ -155,6 +149,12 @@ class TcpForwardClient:
                 except (OSError, ValueError, KeyError):
                     LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
             return
+
+        # --- 发送端限速：在发送前等待 ---
+        if data.speed_limiter and recv:
+            wait_time = data.speed_limiter.acquire(len(recv))
+            if wait_time > 0:
+                time.sleep(wait_time)
 
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to ws uid: {socket_connection.uid}, len: {len(recv)}')

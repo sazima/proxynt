@@ -209,7 +209,14 @@ class WebsocketClient:
                     self.tunnel_manager.register_uid(uid, source_client)
                     LoggerFactory.get_logger().info(f'Registered UID {uid.hex()} to peer {source_client}')
 
-                self.forward_client.create_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
+                # 优先使用消息中携带的限速配置（C2C场景），否则使用本地配置
+                speed_limit = data.get('speed_limit', 0.0)
+                if speed_limit > 0:
+                    speed_limiter = SpeedLimiter(speed_limit)
+                else:
+                    speed_limiter = name_to_speed_limiter.get(name)
+
+                self.forward_client.create_socket(name, uid, data['ip_port'], speed_limiter)
 
             # Handle UDP messages
             elif msg_type == MessageTypeConstant.WEBSOCKET_OVER_UDP:
@@ -226,7 +233,15 @@ class WebsocketClient:
                 data: TcpOverWebsocketMessage = message_data['data']
                 uid = data['uid']
                 name = data['name']
-                self.udp_forward_client.create_udp_socket(name, uid, data['ip_port'], name_to_speed_limiter.get(name))
+
+                # 优先使用消息中携带的限速配置（C2C场景），否则使用本地配置
+                speed_limit = data.get('speed_limit', 0.0)
+                if speed_limit > 0:
+                    speed_limiter = SpeedLimiter(speed_limit)
+                else:
+                    speed_limiter = name_to_speed_limiter.get(name)
+
+                self.udp_forward_client.create_udp_socket(name, uid, data['ip_port'], speed_limiter)
 
             # Handle Heartbeat / Config
             elif msg_type == MessageTypeConstant.PING:

@@ -386,6 +386,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     await self._send_connection_failed(uid, source_rule_name)
                     return
 
+                LoggerFactory.get_logger().info(f'C2C rule found: {source_rule_name}, speed_limit: {rule.get("speed_limit", 0.0)} MB/s')
+
                 if target_client not in self.client_name_to_handler:
                     LoggerFactory.get_logger().warn(f'Target client offline: {target_client}')
                     await self._send_connection_failed(uid, source_rule_name)
@@ -428,6 +430,9 @@ class MyWebSocketaHandler(WebSocketHandler):
                 # Forward REQUEST_TO_CONNECT to target client (always as fallback)
                 message_type = MessageTypeConstant.REQUEST_TO_CONNECT if protocol == 'tcp' else MessageTypeConstant.REQUEST_TO_CONNECT_UDP
 
+                # 获取 C2C 规则中的限速配置
+                speed_limit = rule.get('speed_limit', 0.0)
+
                 forward_message: MessageEntity = {
                     'type_': message_type,
                     'data': {
@@ -435,14 +440,15 @@ class MyWebSocketaHandler(WebSocketHandler):
                         'uid': uid,
                         'ip_port': ip_port,
                         'data': b'',
-                        'source_client': self.client_name  # Add source client info for P2P routing
+                        'source_client': self.client_name,  # Add source client info for P2P routing
+                        'speed_limit': speed_limit  # 传递限速配置给目标客户端
                     }
                 }
                 await target_handler.write_message(
                     NatSerialization.dumps(forward_message, ContextUtils.get_password(), target_handler.compress_support),
                     binary=True
                 )
-                LoggerFactory.get_logger().info(f'Connection request forwarded to target client {target_client}')
+                LoggerFactory.get_logger().info(f'Connection request forwarded to target client {target_client}, speed_limit: {speed_limit}')
 
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'on_message processing took {time.time() - start_time}s')

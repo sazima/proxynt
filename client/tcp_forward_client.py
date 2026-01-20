@@ -295,16 +295,16 @@ class TcpForwardClient:
         if not connection:
             return
 
-        if data.speed_limiter and data.speed_limiter.is_exceed()[0]:
-            self.socket_event_loop.unregister_and_register_delay(each, data, 1)
-            return
-
         try:
             recv = each.recv(data.read_size)
-            if data.speed_limiter:
-                data.speed_limiter.add(len(recv))
         except OSError:
             recv = b''
+
+        # --- 发送端限速：在发送前等待 ---
+        if data.speed_limiter and recv:
+            wait_time = data.speed_limiter.acquire(len(recv))
+            if wait_time > 0:
+                time.sleep(wait_time)
 
         # --- 无缝切换逻辑 ---
         if self.tunnel_manager:

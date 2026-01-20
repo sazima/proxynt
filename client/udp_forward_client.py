@@ -246,14 +246,11 @@ class UdpForwardClient:
 
     def _handle_udp_data(self, conn: UdpSocketConnection, data: bytes, addr):
         """Handle received UDP data"""
-        # Speed limit handling
-        if conn.speed_limiter and conn.speed_limiter.is_exceed()[0]:
-            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                LoggerFactory.get_logger().debug('UDP speed limit exceeded')
-            return
-
-        if conn.speed_limiter:
-            conn.speed_limiter.add(len(data))
+        # --- 发送端限速：在发送前等待 ---
+        if conn.speed_limiter and data:
+            wait_time = conn.speed_limiter.acquire(len(data))
+            if wait_time > 0:
+                time.sleep(wait_time)
 
         # Construct UDP message and send to public server via WebSocket
         send_message: MessageEntity = {
