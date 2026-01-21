@@ -54,7 +54,11 @@ class MyWebSocketaHandler(WebSocketHandler):
     # 客户端到客户端转发路由状态
     # uid → (source_handler, target_handler, rule_name, protocol, target_ip_port)
     c2c_uid_to_routing: Dict[bytes, Tuple['MyWebSocketaHandler', 'MyWebSocketaHandler', str, str, str]] = {}
-    c2c_lock: Lock = Lock()
+    c2c_lock: Lock = None
+
+    @classmethod
+    def init_locks(cls):
+        cls.c2c_lock = asyncio.Lock()
 
     def open(self, *args: str, **kwargs: str):
         self.lock = Lock()
@@ -135,7 +139,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                 if not is_c2c:
                     conn = tcp_forward_client.uid_to_connection.get(uid)
                     if not conn or conn.socket_server.websocket_handler != self:
-                        LoggerFactory.get_logger().warning(f"Security Alert: Client {self.client_name} tried to inject TCP data to UID {uid.hex()} belonging to another client/session.")
+                        LoggerFactory.get_logger().debug(f"Security Alert: Client {self.client_name} tried to inject TCP data to UID {uid.hex()} belonging to another client/session.")
                         return
 
                 if is_c2c:

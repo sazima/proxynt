@@ -156,6 +156,7 @@ def main():
     handlers = [
         (websocket_path, MyWebSocketaHandler),
     ]
+    MyWebSocketaHandler.init_locks()
     if admin_enable:
         handlers.extend([
             (admin_html_path, AdminHtmlHandler),
