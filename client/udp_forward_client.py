@@ -38,10 +38,11 @@ class UdpSocketConnection:
 
 class UdpForwardClient:
     """UDP forward client"""
-    def __init__(self, ws, compress_support: bool):
+    def __init__(self, ws, compress_support: bool, protocol_version: int):
         self.uid_to_connection: Dict[bytes, UdpSocketConnection] = {}
         self.ws = ws
         self.compress_support = compress_support
+        self.protocol_version = protocol_version
         self.running = True
         self.lock = threading.Lock()
 
@@ -177,7 +178,7 @@ class UdpForwardClient:
                         'data': forward_data
                     }
                     self.ws.send(
-                        NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support),
+                        NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support, self.protocol_version),
                         websocket.ABNF.OPCODE_BINARY
                     )
                     LoggerFactory.get_logger().info(f'C2C UDP forward request sent: {rule_name} UID: {uid.hex()}')
@@ -206,7 +207,7 @@ class UdpForwardClient:
                     }
                 }
                 self.ws.send(
-                    NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support),
+                    NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support, self.protocol_version),
                     websocket.ABNF.OPCODE_BINARY
                 )
                 LoggerFactory.get_logger().debug(f'C2C UDP data forwarded: {rule_name} UID: {uid.hex()}, len: {len(data)}')
@@ -267,7 +268,7 @@ class UdpForwardClient:
             LoggerFactory.get_logger().debug(f'Sending UDP to WebSocket, uid: {conn.uid}, len: {len(data)}')
 
         try:
-            self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+            self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support, self.protocol_version), websocket.ABNF.OPCODE_BINARY)
         except Exception as e:
             LoggerFactory.get_logger().error(f"Failed to send UDP to WebSocket: {e}")
 

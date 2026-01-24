@@ -35,3 +35,4 @@ class PushConfigEntity(TypedDict, total=False):
     p2p_supported: bool  # Whether client supports P2P (optional)
     public_ip: str  # Client's public IP (filled by server, optional)
     public_port: int  # Client's public port (filled by server, optional)
+    protocol_version: int  # Serialization protocol version (1=binary, 2=msgpack)

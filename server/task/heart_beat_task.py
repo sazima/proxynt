@@ -54,7 +54,7 @@ class HeartBeatTask:
                     continue
 
                 asyncio.ensure_future(
-                    h.write_message(NatSerialization.dumps(ping_message, ContextUtils.get_password(), h.compress_support), binary=True))
+                    h.write_message(NatSerialization.dumps(ping_message, ContextUtils.get_password(), h.compress_support, h.protocol_version), binary=True))
             except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
         self.check_recv_heart_beat_time()

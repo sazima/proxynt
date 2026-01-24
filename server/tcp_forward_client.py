@@ -174,9 +174,11 @@ class TcpForwardClient:
             except (OSError, ValueError, KeyError):
                 LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
         try:
-            is_compress = socket_connection.socket_server.websocket_handler.compress_support
+            handler = socket_connection.socket_server.websocket_handler
+            is_compress = handler.compress_support
+            protocol_version = handler.protocol_version
             self.tornado_loop.add_callback(
-                partial(socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress)), True)
+                partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress, protocol_version)), True)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
 
@@ -210,8 +212,9 @@ class TcpForwardClient:
                 'ip_port': client_socket_connection.socket_server.ip_port
             }
         }
+        handler = client_socket_connection.socket_server.websocket_handler
         self.tornado_loop.add_callback(
-            partial(client_socket_connection.socket_server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), False)), True
+            partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), handler.compress_support, handler.protocol_version)), True
         )
 
     async def send_to_socket(self, uid: bytes, message: bytes):

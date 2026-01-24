@@ -146,6 +146,7 @@ class WebsocketClient:
         self.heart_beat_task: HeatBeatTask = heart_beat_task
         self.config_data: ClientConfigEntity = config_data
         self.compress_support: bool = config_data['server']['compress']
+        self.protocol_version: int = config_data['server']['protocol_version']
 
         # P2P support
         self.public_ip: str = None
@@ -181,7 +182,7 @@ class WebsocketClient:
 
     def on_message(self, ws, message: bytes):
         try:
-            message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support)
+            message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support, self.protocol_version)
             self.heart_beat_task.set_recv_heart_beat_time(time.time())
 
             msg_type = message_data['type_']
@@ -212,6 +213,7 @@ class WebsocketClient:
                 # 优先使用消息中携带的限速配置（C2C场景），否则使用本地配置
                 speed_limit = data.get('speed_limit', 0.0)
                 if speed_limit > 0:
+                    LoggerFactory.get_logger().info(f'Using speed limit {speed_limit} for {name}')
                     speed_limiter = SpeedLimiter(speed_limit)
                 else:
                     speed_limiter = name_to_speed_limiter.get(name)
@@ -397,7 +399,7 @@ class WebsocketClient:
             }
             if self.ws.sock and self.ws.sock.connected:
                 self.ws.send(
-                    NatSerialization.dumps(msg, ContextUtils.get_password(), self.compress_support),
+                    NatSerialization.dumps(msg, ContextUtils.get_password(), self.compress_support, self.protocol_version),
                     websocket.ABNF.OPCODE_BINARY
                 )
                 LoggerFactory.get_logger().info(f"Sent P2P_PUNCH_REQUEST for {target_client}")
@@ -441,7 +443,7 @@ class WebsocketClient:
                 }
                 self.heart_beat_task.set_recv_heart_beat_time(time.time())
 
-                ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+                ws.send(NatSerialization.dumps(message, ContextUtils.get_password(), self.compress_support, self.protocol_version), websocket.ABNF.OPCODE_BINARY)
                 self.forward_client.set_running(True)
                 self.udp_forward_client.set_running(True)
                 self.heart_beat_task.is_running = True
@@ -520,18 +522,27 @@ def main():
     if compress_support and not has_snappy:
         raise Exception('snappy is not installed')
 
+    # Get protocol version from config, default to 2 for new clients
+    config_data['server'].setdefault('protocol_version', 2)
+    protocol_version = config_data['server']['protocol_version']
+
     LoggerFactory.get_logger().info(f'Connecting to {url}')
 
+    # Add URL parameters
     if compress_support:
         sep = '&' if '?' in url else '?'
         url += sep + 'c=' + json.dumps(compress_support)
 
+    # Add protocol version to URL
+    sep = '&' if '?' in url else '?'
+    url += sep + 'v=' + str(protocol_version)
+
     ws = websocket.WebSocketApp(url)
 
     # Init Clients
-    forward_client = TcpForwardClient(ws, compress_support)
-    udp_forward_client = UdpForwardClient(ws, compress_support)
-    heart_beat_task = HeatBeatTask(ws, SystemConstant.HEART_BEAT_INTERVAL)
+    forward_client = TcpForwardClient(ws, compress_support, protocol_version)
+    udp_forward_client = UdpForwardClient(ws, compress_support, protocol_version)
+    heart_beat_task = HeatBeatTask(ws, SystemConstant.HEART_BEAT_INTERVAL, protocol_version)
 
     # Init Controller
     WebsocketClient(ws, forward_client, udp_forward_client, heart_beat_task, config_data)

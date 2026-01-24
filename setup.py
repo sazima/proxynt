@@ -35,6 +35,7 @@ setuptools.setup(
                       'uvloop==0.22.0; sys_platform != "win32" and python_version >= "3.7"',
                       'uvloop<0.15; sys_platform != "win32" and python_version < "3.7"',
                       'xxhash>=3.0.0',
+                      'msgpack',
                       ],
     extras_require={
         "snappy": ["python-snappy"],

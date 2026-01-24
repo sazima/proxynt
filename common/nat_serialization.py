@@ -1,255 +1,129 @@
-import json
+"""
+NatSerialization - Version dispatcher
+
+根据 protocol_version 选择对应的序列化实现：
+- V1: 二进制格式（原始实现，兼容旧客户端）
+- V2: msgpack 格式（灵活，支持任意字段）
+"""
 import os
 import struct
-import time
 
-try:
-    import snappy
-    has_snappy = True
-except ModuleNotFoundError:
-    has_snappy = False
-
-from common.encrypt_utils import EncryptUtils
-from constant.message_type_constnat import MessageTypeConstant
-from constant.system_constant import SystemConstant
+from common.nat_serialization_v1 import NatSerializationV1
+from common.nat_serialization_v2 import NatSerializationV2
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
-from entity.message.tcp_over_websocket_message import TcpOverWebsocketMessage
-from exceptions.replay_error import ReplayError
-from exceptions.signature_error import SignatureError
 
-UID_LEN = 4
-HEADER_LEN = 22  # xxHash64 模式: 22 字节（比 MD5 模式节省 42%）
+# 默认协议版本
+DEFAULT_PROTOCOL_VERSION = 1
+
+# 版本到序列化器的映射
+VERSION_TO_SERIALIZER = {
+    1: NatSerializationV1,
+    2: NatSerializationV2,
+}
 
 
 class NatSerialization:
     """
-        header + body
+    序列化入口类 - 根据版本分发到对应的实现
 
-        header (22 字节) - 使用 xxHash64 签名:
-        类型(1字节) | body长度(4字节) | 随机字符串(5字节) | 时间戳(4字节) | 签名 (8 字节)
-
-        body (长度不固定):
-        实际数据
-
-        注：使用 xxHash64 替代 MD5，签名速度提升 10 倍，头部大小减少 42%
+    使用方法：
+    - dumps/loads 默认使用 V1（向后兼容）
+    - 可以通过 protocol_version 参数指定版本
     """
 
-    # 报文形式: 类型, 数据
     @classmethod
-    def dumps(cls, data: MessageEntity, key: str, compress: bool) -> bytes:
-        type_ = data['type_']
-        if type_ in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT,
-                     MessageTypeConstant.WEBSOCKET_OVER_UDP, MessageTypeConstant.REQUEST_TO_CONNECT_UDP,
-                     MessageTypeConstant.CONNECT_CONFIRMED, MessageTypeConstant.CONNECT_FAILED):  # 添加所有消息类型
-            data_content: TcpOverWebsocketMessage = data['data']
-            uid = data_content['uid']  # 长度r
-            name = data_content['name']
-            if compress:
-                bytes_: TcpOverWebsocketMessage = snappy.snappy.compress(data_content['data'])
-            else:
-                bytes_ = data_content['data']
-            ip_port = data_content['ip_port']
-            body = struct.pack(f'BBI{UID_LEN}s{len(name.encode())}s{len(ip_port)}s{len(bytes_)}s', len(name.encode()), len(ip_port), len(bytes_), uid, name.encode(), ip_port.encode(), bytes_)
+    def get_serializer(cls, protocol_version: int = DEFAULT_PROTOCOL_VERSION):
+        """获取指定版本的序列化器"""
+        serializer = VERSION_TO_SERIALIZER.get(protocol_version)
+        if serializer is None:
+            raise ValueError(f"Unsupported protocol version: {protocol_version}")
+        return serializer
 
-        elif type_ == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
-            # C2C forward request: support two modes
-            data_content = data['data']
-            uid = data_content['uid']
-            target_client = data_content['target_client'].encode()
-            source_rule_name = data_content['source_rule_name'].encode()
-            protocol = data_content['protocol'].encode()
+    @classmethod
+    def dumps(cls, data: MessageEntity, key: str, compress: bool, protocol_version: int = DEFAULT_PROTOCOL_VERSION) -> bytes:
+        """
+        序列化消息
 
-            # Check if using direct mode (target_ip + target_port) or service mode (target_service)
-            if 'target_ip' in data_content and 'target_port' in data_content:
-                # Direct mode: magic(1) | mode_flag(1) | len_target_client(1) | len_target_ip(1) | len_source_rule_name(1) | len_protocol(1) | target_port(2) | uid(4) | strings...
-                magic = 0xFF  # Magic number to identify new format
-                mode_flag = 0x01
-                target_ip = data_content['target_ip'].encode()
-                target_port = data_content['target_port']
-                body = struct.pack(f'BBBBBBH{UID_LEN}s{len(target_client)}s{len(target_ip)}s{len(source_rule_name)}s{len(protocol)}s',
-                                   magic, mode_flag, len(target_client), len(target_ip), len(source_rule_name), len(protocol),
-                                   target_port, uid, target_client, target_ip, source_rule_name, protocol)
-            else:
-                # Service mode: check if new format or old format for backward compatibility
-                target_service = data_content['target_service'].encode()
+        Args:
+            data: 消息实体
+            key: 加密密钥
+            compress: 是否压缩
+            protocol_version: 协议版本 (1=二进制, 2=msgpack)
 
-                # Always use new format when sending (with magic number for identification)
-                magic = 0xFF  # Magic number to identify new format
-                mode_flag = 0x00
-                body = struct.pack(f'BBBBBB{UID_LEN}s{len(target_client)}s{len(target_service)}s{len(source_rule_name)}s{len(protocol)}s',
-                                   magic, mode_flag, len(target_client), len(target_service), len(source_rule_name), len(protocol),
-                                   uid, target_client, target_service, source_rule_name, protocol)
+        Returns:
+            序列化后的字节数据
+        """
+        serializer = cls.get_serializer(protocol_version)
+        return serializer.dumps(data, key, compress)
 
-        elif type_ == MessageTypeConstant.PUSH_CONFIG:
-            body =  json.dumps(data).encode()
-        elif type_ == MessageTypeConstant.PING:
-            body =  b''
-        elif type_ in (MessageTypeConstant.P2P_OFFER, MessageTypeConstant.P2P_ANSWER,
-                       MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
-                       MessageTypeConstant.P2P_FAILED, MessageTypeConstant.P2P_PRE_CONNECT,
-                       MessageTypeConstant.P2P_PEER_INFO, MessageTypeConstant.P2P_PUNCH_REQUEST):
-            # P2P messages: use JSON encoding of data content only
-            data_content = data.get('data', {})
-            body = json.dumps(data_content).encode()
-        else:
-            body =  b'error'
-        body_len = len(body)
-        nonce = os.urandom(5)
-        timestamp = struct.pack('I', int(time.time()))
-        # 使用 xxHash64 签名（8 字节，比 MD5 快 10 倍）
-        signature = EncryptUtils.xxhash64_hash(nonce + timestamp + body[:12] + key.encode())
-        header = type_.encode() + struct.pack('I', body_len) + nonce + timestamp + signature
-        b =  header + body
-        return EncryptUtils.encrypt(b, key)
+    @classmethod
+    def loads(cls, byte_data: bytes, key: str, compress: bool, protocol_version: int = DEFAULT_PROTOCOL_VERSION) -> MessageEntity:
+        """
+        反序列化消息
 
+        Args:
+            byte_data: 字节数据
+            key: 加密密钥
+            compress: 是否解压
+            protocol_version: 协议版本 (1=二进制, 2=msgpack)
+
+        Returns:
+            消息实体
+        """
+        serializer = cls.get_serializer(protocol_version)
+        return serializer.loads(byte_data, key, compress)
+
+    # 保持向后兼容的方法
     @classmethod
     def check_signature(cls, clear_text: bytes, data_len: int, key: str) -> bool:
-        nonce_and_timestamp = clear_text[5:14]
-        body = clear_text[HEADER_LEN: data_len + HEADER_LEN]
-        signature = clear_text[14:22]  # xxHash64 签名 8 字节
-        return signature == EncryptUtils.xxhash64_hash(nonce_and_timestamp + body[:12] + key.encode())
+        """检查签名（使用 V1 实现）"""
+        return NatSerializationV1.check_signature(clear_text, data_len, key)
 
     @classmethod
     def check_nonce_and_timestamp(cls, clear_text: bytes) -> bool:
-        return True
-        # check and Anti replay attack
-        # nonce = clear_text[5:10]
-        # timestamp = struct.unpack('I', clear_text[10:14])[0]
-        # nonce_to_time = ContextUtils.get_nonce_to_time()
-        # if nonce in nonce_to_time :
-        #     return False
-        # nonce_to_time[nonce] = int(time.time())
-        # return True
+        """检查 nonce 和时间戳（使用 V1 实现）"""
+        return NatSerializationV1.check_nonce_and_timestamp(clear_text)
 
-    @classmethod
-    def loads(cls, byte_data: bytes, key: str, compress: bool) -> MessageEntity:
-        byte_data = EncryptUtils.decrypt(byte_data, key)
-        type_ = byte_data[0:1]
-        body_len = struct.unpack('I', byte_data[1:5])[0]
-        header = byte_data[:HEADER_LEN]
-        if not cls.check_nonce_and_timestamp(byte_data):
-            raise ReplayError()
-        if not cls.check_signature(byte_data, body_len, key):
-            print(f'SignatureError: {key}')
-            raise SignatureError()
-        body = byte_data[HEADER_LEN: body_len + HEADER_LEN]
-        if type_.decode() in (MessageTypeConstant.WEBSOCKET_OVER_TCP, MessageTypeConstant.REQUEST_TO_CONNECT,
-                              MessageTypeConstant.WEBSOCKET_OVER_UDP, MessageTypeConstant.REQUEST_TO_CONNECT_UDP,
-                              MessageTypeConstant.CONNECT_CONFIRMED, MessageTypeConstant.CONNECT_FAILED):  # 添加所有消息类型
-            len_name, len_ip_port, len_bytes = struct.unpack('BBI', body[:8])
-            uid, name, ip_port,  socket_dta = struct.unpack(f'4s{len_name}s{len_ip_port}s{len_bytes}s', body[8:])
-            if compress and len(socket_dta):
-                socket_dta = snappy.snappy.uncompress(socket_dta)
-            data: TcpOverWebsocketMessage = {
-                'uid': uid,
-                'name': name.decode(),
-                'ip_port': ip_port.decode(),
-                'data': socket_dta
-            }
-            return_data: MessageEntity = {
-                'type_': type_.decode(),
-                'data': data
-            }
-            return return_data
-        elif type_.decode() == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
-            # Parse C2C forward request: support old and new formats
-            first_byte = struct.unpack('B', body[:1])[0]
 
-            if first_byte == 0xFF:
-                # New format: magic(1) | mode_flag(1) | ...
-                mode_flag = struct.unpack('B', body[1:2])[0]
-
-                if mode_flag == 0x01:
-                    # Direct mode: parse target_ip and target_port
-                    len_target_client, len_target_ip, len_source_rule_name, len_protocol = struct.unpack('BBBB', body[2:6])
-                    target_port = struct.unpack('H', body[6:8])[0]
-                    uid, target_client, target_ip, source_rule_name, protocol = struct.unpack(
-                        f'4s{len_target_client}s{len_target_ip}s{len_source_rule_name}s{len_protocol}s', body[8:])
-                    data = {
-                        'uid': uid,
-                        'target_client': target_client.decode(),
-                        'target_ip': target_ip.decode(),
-                        'target_port': target_port,
-                        'source_rule_name': source_rule_name.decode(),
-                        'protocol': protocol.decode()
-                    }
-                else:
-                    # Service mode (new format): parse target_service
-                    len_target_client, len_target_service, len_source_rule_name, len_protocol = struct.unpack('BBBB', body[2:6])
-                    uid, target_client, target_service, source_rule_name, protocol = struct.unpack(
-                        f'4s{len_target_client}s{len_target_service}s{len_source_rule_name}s{len_protocol}s', body[6:])
-                    data = {
-                        'uid': uid,
-                        'target_client': target_client.decode(),
-                        'target_service': target_service.decode(),
-                        'source_rule_name': source_rule_name.decode(),
-                        'protocol': protocol.decode()
-                    }
-            else:
-                # Old format (backward compatible): len_target_client(1) | len_target_service(1) | len_source_rule_name(1) | len_protocol(1) | uid(4) | strings...
-                len_target_client = first_byte
-                len_target_service, len_source_rule_name, len_protocol = struct.unpack('BBB', body[1:4])
-                uid, target_client, target_service, source_rule_name, protocol = struct.unpack(
-                    f'4s{len_target_client}s{len_target_service}s{len_source_rule_name}s{len_protocol}s', body[4:])
-                data = {
-                    'uid': uid,
-                    'target_client': target_client.decode(),
-                    'target_service': target_service.decode(),
-                    'source_rule_name': source_rule_name.decode(),
-                    'protocol': protocol.decode()
-                }
-
-            return_data: MessageEntity = {
-                'type_': type_.decode(),
-                'data': data
-            }
-            return return_data
-        elif type_ == MessageTypeConstant.PUSH_CONFIG.encode():
-            return_data: MessageEntity = json.loads(body.decode())
-            return return_data
-        elif type_ == MessageTypeConstant.PING.encode():
-            return_data: MessageEntity = {
-                'type_': type_.decode(),
-                'data': None
-            }
-            return return_data
-        elif type_.decode() in (MessageTypeConstant.P2P_OFFER, MessageTypeConstant.P2P_ANSWER,
-                                MessageTypeConstant.P2P_CANDIDATE, MessageTypeConstant.P2P_SUCCESS,
-                                MessageTypeConstant.P2P_FAILED, MessageTypeConstant.P2P_PRE_CONNECT,
-                                MessageTypeConstant.P2P_PEER_INFO, MessageTypeConstant.P2P_PUNCH_REQUEST):
-            # P2P messages: JSON decode
-            data = json.loads(body.decode())
-            return_data: MessageEntity = {
-                'type_': type_.decode(),
-                'data': data
-            }
-            return return_data
-        else:
-            raise Exception('error ')
-
+# 保持向后兼容的常量
+UID_LEN = 4
+HEADER_LEN = 22
 
 
 if __name__ == '__main__':
-
     ContextUtils.set_nonce_to_time({})
+
     def _print_commend(msg):
         print(''.join("b'{}'".format(''.join('\\x{:02x}'.format(b) for b in msg))))
 
-
-    data = {'type_': 'a',
-            'data': {'name': 'ssh',
-                     'target_client': 'abc',
-                     'target_service': 'abc',
-                     'source_rule_name': 'source_rule_name',
-                     'protocol': 'tcp',
-                     # 'data': 'SSH-2.0-OpenSSH_7.8'.encode() ,
-                     'data': b'' ,
-                     'uid': os.urandom(4),
-                     'ip_port': '127.0.0.1:8888'}}
+    # 测试数据
+    data = {
+        'type_': 'a',
+        'data': {
+            'name': 'ssh',
+            'uid': os.urandom(4),
+            'ip_port': '127.0.0.1:8888',
+            'data': b'test data',
+            'source_client': 'client1',  # V2 支持的额外字段
+            'speed_limit': 1024.0,       # V2 支持的额外字段
+        }
+    }
     key32 = 'xxxx'
-    # salt = '!%F=-?Pst970'
-    a = NatSerialization.dumps(data, key32, False)
-    print(a)
-    b = NatSerialization.loads(a, key32, True)
-    print(b)
+
+    print("=== V1 测试 (二进制格式) ===")
+    try:
+        a1 = NatSerialization.dumps(data, key32, False, protocol_version=1)
+        print(f"V1 序列化大小: {len(a1)} bytes")
+        b1 = NatSerialization.loads(a1, key32, False, protocol_version=1)
+        print(f"V1 反序列化: {b1}")
+        print(f"注意: V1 不支持 source_client 和 speed_limit 字段")
+    except Exception as e:
+        print(f"V1 错误: {e}")
+
+    print("\n=== V2 测试 (msgpack 格式) ===")
+    a2 = NatSerialization.dumps(data, key32, False, protocol_version=2)
+    print(f"V2 序列化大小: {len(a2)} bytes")
+    b2 = NatSerialization.loads(a2, key32, False, protocol_version=2)
+    print(f"V2 反序列化: {b2}")
+    print(f"V2 支持所有字段，包括 source_client={b2['data'].get('source_client')}, speed_limit={b2['data'].get('speed_limit')}")

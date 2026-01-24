@@ -130,10 +130,11 @@ class PrivateSocketConnection:
 
 
 class TcpForwardClient:
-    def __init__(self, ws: websocket, compress_support: bool):
+    def __init__(self, ws: websocket, compress_support: bool, protocol_version: int):
         self.uid_to_socket_connection: Dict[bytes, PrivateSocketConnection] = dict()
         self.socket_to_socket_connection: Dict[socket.socket, PrivateSocketConnection] = dict()
         self.compress_support: bool = compress_support
+        self.protocol_version: int = protocol_version
         self.ws = ws
         self.lock = Lock()
         self.socket_event_loop = SelectPool()
@@ -272,7 +273,7 @@ class TcpForwardClient:
                     'data': forward_data
                 }
                 self.ws.send(
-                    NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support),
+                    NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support, self.protocol_version),
                     websocket.ABNF.OPCODE_BINARY
                 )
                 LoggerFactory.get_logger().info(f'C2C forward request sent: {rule_name} UID: {uid.hex()}')
@@ -327,7 +328,7 @@ class TcpForwardClient:
         }
 
         connection.sender.enqueue_message(
-            NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support)
+            NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support, self.protocol_version)
         )
 
         if not recv:
@@ -372,7 +373,7 @@ class TcpForwardClient:
                             'ip_port': ip_port
                         }
                     }
-                    self.ws.send(NatSerialization.dumps(confirm_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+                    self.ws.send(NatSerialization.dumps(confirm_message, ContextUtils.get_password(), self.compress_support, self.protocol_version), websocket.ABNF.OPCODE_BINARY)
                     if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                         LoggerFactory.get_logger().debug(f'Connection confirmation message sent uid: {uid}')
 
@@ -390,7 +391,7 @@ class TcpForwardClient:
                         }
                     }
                     try:
-                        self.ws.send(NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+                        self.ws.send(NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support, self.protocol_version), websocket.ABNF.OPCODE_BINARY)
                     except Exception as send_err:
                         LoggerFactory.get_logger().error(f'Failed to send connection failure message: {send_err}')
 
@@ -487,7 +488,7 @@ class TcpForwardClient:
             }
         }
         start_time = time.time()
-        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), websocket.ABNF.OPCODE_BINARY)
+        self.ws.send(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support, self.protocol_version), websocket.ABNF.OPCODE_BINARY)
         LoggerFactory.get_logger().debug(f'Send to websocket cost time {time.time() - start_time}')
 
     def send_by_uid(self, uid: bytes, msg: bytes):

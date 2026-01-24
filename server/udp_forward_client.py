@@ -224,9 +224,11 @@ class UdpForwardClient:
             LoggerFactory.get_logger().debug(f"Send UDP data to WebSocket, uid: {uid}, len: {len(data)}")
 
         # Schedule WebSocket send operation in the async loop
-        is_compress = server.websocket_handler.compress_support
+        handler = server.websocket_handler
+        is_compress = handler.compress_support
+        protocol_version = handler.protocol_version
         self.tornado_loop.add_callback(
-            partial(server.websocket_handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress)), True)
+            partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress, protocol_version)), True)
 
     async def register_udp_server(self, port: int, name: str, ip_port: str, websocket_handler, speed_limit_size: float):
         """Register a UDP server"""

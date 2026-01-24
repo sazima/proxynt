@@ -2,6 +2,9 @@
 {% block body%}
 
 <div id="app">
+    <div style="margin: 10px auto; width: 90%; text-align: right; color: #909399; font-size: 12px;">
+        服务端版本: {[ serverVersion ]}
+    </div>
     <el-table
             :data="tableData"
             medium="medium"
@@ -152,6 +155,7 @@
                 prop="status"
                 label="状态"
                 :filters="[{ text: 'online', value: 'online' }, { text: 'offline', value: 'offline' }]"
+                :filter-method="filterStatus"
                 filter-placement="bottom-end">
             <template slot-scope="scope">
                 <el-tag
@@ -315,6 +319,7 @@
         delimiters: ['{[', ']}'], // 这句可以指定 {[ ]} 为插值表达式的新符号
         data() {
             return {
+                serverVersion: '',
                 expands: [],
                 tableData: [{client_name: 'ssh'}],
                 dialogFormVisible: false,
@@ -361,6 +366,9 @@
             this.intervalTask.stop()
         },
         methods: {
+            filterStatus(value, row) {
+                return row.status === value
+            },
             handleAdd(row) {
                 this.form = {
                     is_edit: false,
@@ -450,6 +458,7 @@
                         }
                     }
                     this.tableData = res.data.data
+                    this.serverVersion = res.data.server_version || ''
                     if (updateExpand) {
                         this.tableData.forEach(item => {
                             const {client_name, expand} = item

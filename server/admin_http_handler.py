@@ -118,7 +118,8 @@ class AdminHttpApiHandler(RequestHandler):
             self.write({
                 'code': 200,
                 'data': return_list,
-                'msg': ''
+                'msg': '',
+                'server_version': SystemConstant.VERSION
             })
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())

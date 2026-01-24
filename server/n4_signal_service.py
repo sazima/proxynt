@@ -285,8 +285,8 @@ class N4SignalService:
 
             # Serialize messages
             password = ContextUtils.get_password()
-            data_to_a = NatSerialization.dumps(msg_to_a, password, handler_a.compress_support)
-            data_to_b = NatSerialization.dumps(msg_to_b, password, handler_b.compress_support)
+            data_to_a = NatSerialization.dumps(msg_to_a, password, handler_a.compress_support, handler_a.protocol_version)
+            data_to_b = NatSerialization.dumps(msg_to_b, password, handler_b.compress_support, handler_b.protocol_version)
 
             # Send via Tornado (thread-safe)
             if self.tornado_loop:

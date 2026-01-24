@@ -42,6 +42,7 @@ class MyWebSocketaHandler(WebSocketHandler):
     recv_time: float = None
 
     compress_support: bool = False  # Whether snappy compression is supported
+    protocol_version: int = 1  # Serialization protocol version (1=binary, 2=msgpack)
 
     # P2P support
     p2p_supported: bool = False  # Whether client supports P2P
@@ -64,6 +65,13 @@ class MyWebSocketaHandler(WebSocketHandler):
         self.lock = Lock()
         self.client_name = None
         self.version = None
+
+        # Get protocol version from URL param, default to 1 for backward compatibility
+        try:
+            self.protocol_version = int(self.get_argument('v', '1'))
+        except (ValueError, TypeError):
+            self.protocol_version = 1
+
         try:
             self.compress_support = json.loads(self.get_argument('c', 'false'))
         except JSONDecodeError:
@@ -88,7 +96,7 @@ class MyWebSocketaHandler(WebSocketHandler):
         except Exception as e:
             LoggerFactory.get_logger().warning(f'Failed to get client port: {e}')
             self.public_port = 0
-        LoggerFactory.get_logger().info(f'New WebSocket connection opened from {self.public_ip}:{self.public_port}, compression supported: {self.compress_support}')
+        LoggerFactory.get_logger().info(f'New WebSocket connection opened from {self.public_ip}:{self.public_port}, compression: {self.compress_support}, protocol_version: {self.protocol_version}')
 
     async def write_message(self, message, binary=False):
         start_time = time.time()
@@ -109,7 +117,7 @@ class MyWebSocketaHandler(WebSocketHandler):
     async def on_message_async(self, message):
         tcp_forward_client = TcpForwardClient.get_instance()
         try:
-            message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support)
+            message_dict: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support, self.protocol_version)
         except json.decoder.JSONDecodeError:
             self.close(reason='Invalid password')
             raise InvalidPassword()
@@ -148,18 +156,18 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if self == source_handler:
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
-                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
+                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support, target_handler.protocol_version)
                             await target_handler.write_message(message, binary=True)
                         else:
                             await target_handler.write_message(
                                 NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                       target_handler.compress_support),
+                                                       target_handler.compress_support, target_handler.protocol_version),
                                 binary=True
                             )
                     elif self == target_handler:
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support),
+                                                   source_handler.compress_support, source_handler.protocol_version),
                             binary=True
                         )
 
@@ -195,18 +203,18 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if self == source_handler:
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
-                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support)
+                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support, target_handler.protocol_version)
                             await target_handler.write_message(message, binary=True)
                         else:
                             await target_handler.write_message(
                                 NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                       target_handler.compress_support),
+                                                       target_handler.compress_support, target_handler.protocol_version),
                                 binary=True
                             )
                     elif self == target_handler:
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support),
+                                                   source_handler.compress_support, source_handler.protocol_version),
                             binary=True
                         )
                 else:
@@ -320,7 +328,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     message_dict['data']['public_ip'] = self.public_ip
                     message_dict['data']['public_port'] = self.public_port
 
-                await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support), binary=True)
+                await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support, self.protocol_version), binary=True)
 
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.recv_time = time.time()
@@ -334,7 +342,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if self == target_handler:
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support),
+                                                   source_handler.compress_support, source_handler.protocol_version),
                             binary=True
                         )
                 elif uid in tcp_forward_client.uid_to_connection:
@@ -352,7 +360,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                                     'ip_port': connection.socket_server.ip_port
                                 }
                             }
-                            await self.write_message(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support), binary=True)
+                            await self.write_message(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support, self.protocol_version), binary=True)
                     connection.early_data_buffer.clear()
 
             elif message_dict['type_'] == MessageTypeConstant.CONNECT_FAILED:
@@ -365,7 +373,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if self == target_handler:
                         await source_handler.write_message(
                             NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support),
+                                                   source_handler.compress_support, source_handler.protocol_version),
                             binary=True
                         )
                     async with self.c2c_lock:
@@ -449,7 +457,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     }
                 }
                 await target_handler.write_message(
-                    NatSerialization.dumps(forward_message, ContextUtils.get_password(), target_handler.compress_support),
+                    NatSerialization.dumps(forward_message, ContextUtils.get_password(), target_handler.compress_support, target_handler.protocol_version),
                     binary=True
                 )
                 LoggerFactory.get_logger().info(f'Connection request forwarded to target client {target_client}, speed_limit: {speed_limit}')
@@ -504,7 +512,7 @@ class MyWebSocketaHandler(WebSocketHandler):
             }
         }
         await self.write_message(
-            NatSerialization.dumps(msg_to_self, ContextUtils.get_password(), self.compress_support),
+            NatSerialization.dumps(msg_to_self, ContextUtils.get_password(), self.compress_support, self.protocol_version),
             binary=True
         )
 
@@ -516,7 +524,7 @@ class MyWebSocketaHandler(WebSocketHandler):
             }
         }
         await target_handler.write_message(
-            NatSerialization.dumps(msg_to_target, ContextUtils.get_password(), target_handler.compress_support),
+            NatSerialization.dumps(msg_to_target, ContextUtils.get_password(), target_handler.compress_support, target_handler.protocol_version),
             binary=True
         )
 
@@ -552,7 +560,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 try:
                                     await other_handler.write_message(
                                         NatSerialization.dumps(close_message, ContextUtils.get_password(),
-                                                               other_handler.compress_support),
+                                                               other_handler.compress_support, other_handler.protocol_version),
                                         binary=True
                                     )
                                 except Exception as e:
@@ -602,6 +610,6 @@ class MyWebSocketaHandler(WebSocketHandler):
             }
         }
         await self.write_message(
-            NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support),
+            NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support, self.protocol_version),
             binary=True
         )

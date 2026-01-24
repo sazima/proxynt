@@ -15,11 +15,12 @@ from entity.message.message_entity import MessageEntity
 
 
 class HeatBeatTask:
-    def __init__(self, ws: websocket.WebSocketApp, sleep_break: int,):
+    def __init__(self, ws: websocket.WebSocketApp, sleep_break: int, protocol_version: int):
         self.ws: websocket.WebSocketApp = ws
         self.is_running = False
         self.recv_heart_beat_time: float = time.time()
         self.sleep_break = sleep_break
+        self.protocol_version = protocol_version
 
     def set_recv_heart_beat_time(self, d: float):
         self.recv_heart_beat_time = d
@@ -57,7 +58,7 @@ class HeatBeatTask:
             }
             # 心跳消息直接发送（不通过队列），确保最低延迟
             # 因为客户端心跳不经过 MessageSender，直接使用 ws.send
-            self.ws.send(NatSerialization.dumps(ping_message, ContextUtils.get_password(), False), websocket.ABNF.OPCODE_BINARY)
+            self.ws.send(NatSerialization.dumps(ping_message, ContextUtils.get_password(), False, self.protocol_version), websocket.ABNF.OPCODE_BINARY)
             # LoggerFactory.get_logger().debug('send client heart beat success ')
         else:
             pass
