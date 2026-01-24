@@ -1,6 +1,6 @@
 from typing import List, Dict
 
-from entity.message.push_config_entity import ClientData
+from entity.message.push_config_entity import ClientData, ClientToClientRule
 from entity.server_config_entity import AdminEntity
 from entity.server_config_entity import ServerConfigEntity
 
@@ -122,7 +122,7 @@ class ContextUtils:
         c[cls._heart_beat_task] = task
 
     @classmethod
-    def get_c2c_rules(cls) -> List:
+    def get_c2c_rules(cls) -> List[ClientToClientRule]:
         """获取客户端到客户端转发规则"""
         server_config = cls.get_server_config()
         return server_config.get('client_to_client_rules', [])

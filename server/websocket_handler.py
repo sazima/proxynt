@@ -245,8 +245,8 @@ class MyWebSocketaHandler(WebSocketHandler):
                     client_name = push_config['client_name']
                     self.version = push_config.get('version')
 
-                    # self.p2p_supported = push_config.get('p2p_supported', False)
-                    self.p2p_supported = False
+                    self.p2p_supported = push_config.get('p2p_supported', False)
+                    # self.p2p_supported = False  # todo:
                     if self.p2p_supported:
                         LoggerFactory.get_logger().info(f'Client {client_name} supports P2P, public address: {self.public_ip}:{self.public_port}')
                     client_name_to_config_in_server = ContextUtils.get_client_name_to_config_in_server()
@@ -304,6 +304,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     # 推送此客户端相关的 C2C 规则
                     c2c_rules = ContextUtils.get_c2c_rules()
                     client_c2c_rules = []
+
                     for rule in c2c_rules:
                         if rule.get('source_client') == client_name and rule.get('enabled', True):
                             client_rule = {
@@ -313,8 +314,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                                 'local_ip': rule['local_ip'],
                                 'protocol': rule['protocol'],
                                 'speed_limit': rule.get('speed_limit', 0.0),
-                                # 'p2p_enabled': rule.get('p2p_enabled', True)
-                                'p2p_enabled': False
+                                'p2p_enabled': rule.get('p2p_enabled', True)
                             }
                             if 'target_ip' in rule and 'target_port' in rule:
                                 client_rule['target_ip'] = rule['target_ip']
@@ -432,11 +432,21 @@ class MyWebSocketaHandler(WebSocketHandler):
                     self.c2c_uid_to_routing[uid] = (self, target_handler, source_rule_name, protocol, ip_port)
 
                 # Try P2P if both clients support it AND rule allows it (only for TCP)
-                rule_p2p_enabled = False
-                # rule_p2p_enabled = rule.get('p2p_enabled', True)
-                if (protocol == 'tcp' and rule_p2p_enabled and
-                        self.p2p_supported and target_handler.p2p_supported):
-                    # Initiate P2P punch via N4 Signal Service
+                # rule_p2p_enabled = False # todo:
+                rule_p2p_enabled = rule['p2p_enabled']  # todo: 这里应该是c2c配置
+                print(rule)
+            #  {'name': 'xjy_test', 'source_client': '家里小主机', 'target_client': 'xinjiaya_server_test', 'local
+            #     .0.1', 'protocol': 'tcp', 'speed_limit': 0.0, 'enabled': True, 'p2p_enabled': False, 'target_ip': '127.0.0.1', 'target_port': 22
+
+                current_rule = None
+                # if (protocol == 'tcp' and rule_p2p_enabled and self.p2p_supported and target_handler.p2p_supported):
+                #     # Initiate P2P punch via N4 Signal Service
+                #     for rule in ContextUtils.get_c2c_rules():
+                #         # 获取当前的规则
+                #         if rule['enabled'] and rule['name'] == source_rule_name and rule['source_client'] == self.client_name:
+                #             current_rule = rule
+                #
+                if rule_p2p_enabled:
                     await self._initiate_p2p_punch(target_client)
 
                 # Forward REQUEST_TO_CONNECT to target client (always as fallback)
@@ -613,3 +623,21 @@ class MyWebSocketaHandler(WebSocketHandler):
             NatSerialization.dumps(fail_message, ContextUtils.get_password(), self.compress_support, self.protocol_version),
             binary=True
         )
+
+
+    # def _get_p2p_run_by_client_target(self, client_name: str, target_client_name: str, ) -> dict:
+    #     c2c_rules = ContextUtils.get_c2c_rules()
+    #     client_c2c_rules = []
+    #     for rule in c2c_rules:
+    #         if rule.get('source_client') == client_name and rule.get('enabled', True):
+    #             # client_rule = {
+    #             #     'name': rule['name'],
+    #             #     'target_client': rule['target_client'],
+    #             #     'local_port': rule['local_port'],
+    #             #     'local_ip': rule['local_ip'],
+    #             #     'protocol': rule['protocol'],
+    #             #     'speed_limit': rule.get('speed_limit', 0.0),
+    #             #     'p2p_enabled': rule.get('p2p_enabled', True)
+    #             # }
+    #             return rule
+    #

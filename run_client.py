@@ -290,7 +290,10 @@ class WebsocketClient:
         if self.tunnel_manager.is_tunnel_established(peer_name):
             LoggerFactory.get_logger().info(f"Tunnel to {peer_name} already exists, skipping punch")
             return
-
+        # 检查是否已有隧道或正在打洞
+        # if self.tunnel_manager.has_tunnel(peer_name):
+        #     LoggerFactory.get_logger().info(f"Ignoring punch request for {peer_name} (Already active/punching)")
+        #     return
         # Store pending session
         self.pending_sessions[session_id_hex] = {
             'peer_name': peer_name,

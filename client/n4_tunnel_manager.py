@@ -17,6 +17,7 @@ class N4TunnelManager:
     """
     P2P 隧道管理器
     负责物理打洞的协调及抽象协议隧道的生命周期管理。
+    支持：即时中转连接 -> 后台打洞 -> 成功后无缝切换
     """
     def __init__(self, local_client_name: str, server_host: str, server_port: int,
                  tunnel_class: Type[AbstractTunnel] = KcpTunnelImpl):
@@ -38,9 +39,12 @@ class N4TunnelManager:
         self.uid_to_peer: Dict[bytes, str] = {}
 
         # 状态控制
-        self.pending_punch_requests: Set[str] = set() # 正在申请打洞的
-        self.handshaking_peers: Set[str] = set()      # 正在进行打洞或协议握手的
-        self.last_failure_time: Dict[str, float] = {} # 记录失败时间点，用于 30s 冷却
+        self.punching_peers: Set[str] = set()      # 正在进行打洞握手中的 Peer (防止重复触发)
+
+        # 冷却时间管理
+        self.last_punch_attempt: Dict[str, float] = {}
+        self.PUNCH_COOLDOWN = 60  # 失败后冷却 60 秒
+        self.REQUEST_DEBOUNCE = 5 # 请求去抖动 5 秒
 
         self.lock = threading.Lock()
         self.logger = LoggerFactory.get_logger()
@@ -49,7 +53,7 @@ class N4TunnelManager:
         self.ws_client = None
         self.on_data_received = None # func(uid, data)
         self.on_tunnel_closed = None # func(peer_name)
-        self.on_punch_failed = None
+        self.on_punch_failed = None  # func(peer_name)
 
         self.running = False
         self.update_thread = None
@@ -81,15 +85,17 @@ class N4TunnelManager:
 
             time.sleep(0.01)
 
-    def send_data(self, uid: bytes, data: bytes) -> bool:
+    def send_data(self, uid: bytes, data: bytes, trigger_punch: bool = False) -> bool:
         """
         业务数据发送入口（无缝切换的核心）
-        返回 True: 数据已交由 P2P 隧道发送
-        返回 False: 隧道不可用，调用者应继续走 WebSocket
+        :param uid: 连接ID
+        :param data: 数据内容
+        :param trigger_punch: 如果隧道不存在，是否允许主动发起打洞请求 (Client A=True, Client B=False)
+        :return: True=已走隧道, False=需走中转
         """
         peer_name = self.uid_to_peer.get(uid)
         if not peer_name:
-            return False
+            return False # 未知目标，走中转
 
         with self.lock:
             tunnel = self.tunnels.get(peer_name)
@@ -99,32 +105,49 @@ class N4TunnelManager:
             if tunnel.send(uid, data):
                 return True
             else:
-                self.logger.warn(f"P2P Tunnel to {peer_name} send failed, closing.")
+                self.logger.warn(f"P2P Tunnel to {peer_name} send failed, closing and fallback to relay.")
                 self._handle_failure(peer_name)
-                return False
+                # 隧道发送失败，返回 False 让上层走中转，并触发下一次打洞重试检查
 
-        # 2. 如果正在握手或打洞，静默走 WebSocket，不重复触发
-        if peer_name in self.pending_punch_requests or peer_name in self.handshaking_peers:
-            return False
+        # 2. 隧道不可用，如果是发起端(A)，检查是否需要打洞
+        if trigger_punch:
+            self._trigger_punch_if_needed(peer_name)
 
-        # 3. 检查冷却时间：失败后 30s 内不重试打洞
-        now = time.time()
-        if now - self.last_failure_time.get(peer_name, 0) < 30:
-            return False
-
-        # 4. 既没有隧道也不在处理中，触发打洞请求
-        if self.ws_client:
-            self.logger.info(f"P2P required for {peer_name}. Initiating {self.TunnelClass.__name__} setup.")
-            with self.lock:
-                self.pending_punch_requests.add(peer_name)
-            self.ws_client._send_punch_request(peer_name)
-
+        # 3. 返回 False，指示调用者使用 WebSocket 中转（保证即时连接性）
         return False
+
+    def _trigger_punch_if_needed(self, peer_name: str):
+        """判断是否需要发起打洞请求"""
+        now = time.time()
+
+        with self.lock:
+            # 如果正在打洞中（物理 UDP Socket 已经创建并正在交互），跳过
+            if peer_name in self.punching_peers:
+                return
+
+            # 检查冷却时间
+            last_time = self.last_punch_attempt.get(peer_name, 0)
+
+            if now - last_time < self.REQUEST_DEBOUNCE:
+                return
+
+            # 更新尝试时间，用于去抖动
+            # [注意] 这里不能把 peer_name 加入 self.punching_peers
+            # 必须等到 prepare_punch 被调用时才加入，否则 has_tunnel() 会在 PUNCH_REQUEST 回来时误判
+            self.last_punch_attempt[peer_name] = now
+
+        # 发起请求（异步，不阻塞当前数据流）
+        if self.ws_client:
+            self.logger.info(f"[Auto Punch] Requesting P2P tunnel for {peer_name} (Background)...")
+            threading.Thread(target=self.ws_client._send_punch_request, args=(peer_name,), daemon=True).start()
 
     def prepare_punch(self, peer_name: str, session_id: bytes) -> Optional[socket.socket]:
         """收到 PUNCH_REQUEST：初始化 Socket 池并返回用于 EXCHANGE 的第一个 Socket"""
         with self.lock:
-            # 如果旧隧道还存在，先物理关闭
+            # [关键] 真正收到服务端指令，开始打洞流程，此时标记为 punching
+            self.punching_peers.add(peer_name)
+
+            # 如果旧隧道还存在（异常情况），先物理关闭
             if peer_name in self.tunnels:
                 self.tunnels[peer_name].close()
                 self.tunnels.pop(peer_name, None)
@@ -136,12 +159,14 @@ class N4TunnelManager:
             )
 
             try:
+                # 使用纯净 UDP 发送握手包
                 exchange_sock = punch_client.send_exchange()
                 pair_key = get_pair_key(self.local_client_name, peer_name)
                 self.punch_clients[pair_key] = punch_client
                 return exchange_sock
             except Exception as e:
                 self.logger.error(f"Failed to prepare punch for {peer_name}: {e}")
+                self.punching_peers.discard(peer_name)
                 return None
 
     def receive_peer_info(self, peer_name: str, peer_ip: str, peer_port: int):
@@ -155,17 +180,17 @@ class N4TunnelManager:
                 args=(punch_client, peer_name, peer_ip, peer_port, pair_key),
                 daemon=True
             ).start()
+        else:
+            self.logger.warning(f"Received PEER_INFO for {peer_name} but no punch client found.")
+            with self.lock:
+                self.punching_peers.discard(peer_name)
 
     def _run_punch_and_setup(self, punch_client: N4PunchClient, peer_name: str,
                              peer_ip: str, peer_port: int, pair_key: Tuple[str, str]):
         """后台线程：执行打洞 -> 实例化 TunnelImpl -> 建立握手"""
-        with self.lock:
-            self.handshaking_peers.add(peer_name)
-            self.pending_punch_requests.discard(peer_name)
-
         try:
-            # 1. 物理打洞
-            winner_sock, peer_addr = punch_client.punch(peer_ip, peer_port, wait=15)
+            # 1. 物理打洞 (纯净 UDP)
+            winner_sock, peer_addr = punch_client.punch(peer_ip, peer_port, wait=10)
             self.logger.info(f"Punch SUCCESS for {peer_name}. Setting up {self.TunnelClass.__name__}...")
 
             # 2. 确定角色
@@ -182,12 +207,14 @@ class N4TunnelManager:
                 is_server=is_server
             )
 
-            # 4. 开始协议激活
+            # 4. 开始协议激活 (此时 socket 会被升级 QoS)
             tunnel.establish()
 
         except Exception as e:
-            self.logger.error(f"P2P setup failed for {peer_name}: {e}")
+            self.logger.warn(f"P2P setup failed for {peer_name}: {e}")
             self._handle_failure(peer_name)
+
+            # 通知上层打洞失败
             if self.on_punch_failed:
                 self.on_punch_failed(peer_name)
         finally:
@@ -199,23 +226,27 @@ class N4TunnelManager:
         peer_name = tunnel.peer_name
         with self.lock:
             self.tunnels[peer_name] = tunnel
-            self.handshaking_peers.discard(peer_name)
-            self.last_failure_time.pop(peer_name, None)
+            self.punching_peers.discard(peer_name)
+            # 成功建立连接，清除冷却时间
+            self.last_punch_attempt.pop(peer_name, None)
+
         self.logger.info(f"=== [P2P READY] {self.TunnelClass.__name__} Tunnel Established for {peer_name} ===")
 
     def _internal_on_closed(self, peer_name: str):
         """由具体 TunnelImpl 在连接断开时调用"""
+        self.logger.info(f"Tunnel closed for {peer_name}, switching to relay.")
         self._handle_failure(peer_name)
         if self.on_tunnel_closed:
             self.on_tunnel_closed(peer_name)
 
     def _handle_failure(self, peer_name: str):
-        """统一失败处理逻辑"""
+        """统一失败处理逻辑：清理资源并设置冷却时间"""
         with self.lock:
             self.tunnels.pop(peer_name, None)
-            self.handshaking_peers.discard(peer_name)
-            self.pending_punch_requests.discard(peer_name)
-            self.last_failure_time[peer_name] = time.time()
+            self.punching_peers.discard(peer_name)
+
+            # 设置冷却时间
+            self.last_punch_attempt[peer_name] = time.time() - self.REQUEST_DEBOUNCE + self.PUNCH_COOLDOWN
 
     def register_uid(self, uid: bytes, peer_name: str):
         with self.lock:
@@ -229,7 +260,10 @@ class N4TunnelManager:
         return peer_name in self.tunnels
 
     def has_tunnel(self, peer_name: str) -> bool:
-        return peer_name in self.tunnels or peer_name in self.pending_punch_requests or peer_name in self.handshaking_peers
+        """
+        判断是否“有隧道”：包含已建立的隧道，或者正在建立中的隧道。
+        """
+        return peer_name in self.tunnels or peer_name in self.punching_peers
 
     def get_tunnel(self, peer_name: str) -> Optional[AbstractTunnel]:
         return self.tunnels.get(peer_name)

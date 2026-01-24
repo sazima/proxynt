@@ -17,6 +17,7 @@ from common.speed_limit import SpeedLimiter
 from constant.message_type_constnat import MessageTypeConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
+from entity.message.push_config_entity import ClientToClientRule
 
 
 class MessageSender:
@@ -120,13 +121,15 @@ class MessageSender:
 
 class PrivateSocketConnection:
     """Client connecting to internal network port"""
-
-    def __init__(self, uid: bytes, s: socket.socket, name: str, ws):
+    def __init__(self, uid: bytes, s: socket.socket, name: str, ws,
+                 p2p_enabled: bool = True, is_initiator: bool = False):
         self.uid: bytes = uid
         self.socket: socket.socket = s
         self.name: str = name
         self.sender = MessageSender(ws)
         self.sender.start()
+        self.p2p_enabled = p2p_enabled
+        self.is_initiator = is_initiator # True for Client A, False for Client B
 
 
 class TcpForwardClient:
@@ -141,6 +144,7 @@ class TcpForwardClient:
 
         # C2C client-to-client forward state
         self.c2c_rules: List[dict] = []                     # C2C rules list
+        self.c2c_name_to_rule: Dict[str, ClientToClientRule] = {}
         self.c2c_listeners: Dict[str, socket.socket] = {}   # rule_name → listener socket
         self.c2c_uid_to_rule: Dict[bytes, str] = {}         # UID → rule_name
 
@@ -183,7 +187,9 @@ class TcpForwardClient:
         self.c2c_rules = c2c_rules
         LoggerFactory.get_logger().info(f'Setting up {len(c2c_rules)} C2C TCP listeners')
 
+        self.c2c_name_to_rule.clear()
         for rule in c2c_rules:
+            self.c2c_name_to_rule[rule['name']] = rule
             if rule['protocol'] != 'tcp':
                 continue
 
@@ -215,15 +221,13 @@ class TcpForwardClient:
 
     def handle_c2c_tcp_accept(self, listener: socket.socket, rule: dict):
         """
-        Handle C2C TCP connection acceptance
-        Loop to accept connections from local applications, send CLIENT_TO_CLIENT_FORWARD request for each connection
+        Handle C2C TCP connection acceptance (Client A / Source Side)
         """
         rule_name = rule['name']
         target_client = rule['target_client']
         protocol = rule['protocol']
         speed_limit = rule.get('speed_limit', 0.0)
-
-        # Check if using direct mode (target_ip + target_port) or service mode (target_service)
+        p2p_enabled = rule.get('p2p_enabled', True) # Default to True if not set
         use_direct_mode = 'target_ip' in rule and 'target_port' in rule
 
         LoggerFactory.get_logger().info(f'C2C TCP accept thread started: {rule_name}')
@@ -231,37 +235,30 @@ class TcpForwardClient:
         while True:
             try:
                 client_socket, client_addr = listener.accept()
-                LoggerFactory.get_logger().info(f'C2C TCP connection accepted: {rule_name} from {client_addr}')
-
-                # Enable TCP_NODELAY to reduce latency
                 client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-                # Generate unique UID
                 uid = os.urandom(4)
 
-                # Store UID → rule_name mapping
                 with self.lock:
                     self.c2c_uid_to_rule[uid] = rule_name
-
-                    # Create connection object
-                    connection = PrivateSocketConnection(uid, client_socket, rule_name, self.ws)
+                    # Client A is the initiator
+                    connection = PrivateSocketConnection(
+                        uid, client_socket, rule_name, self.ws,
+                        p2p_enabled=p2p_enabled, is_initiator=True
+                    )
                     self.uid_to_socket_connection[uid] = connection
                     self.socket_to_socket_connection[client_socket] = connection
 
-                # Register UID to tunnel_manager for P2P routing
                 if self.tunnel_manager:
                     self.tunnel_manager.register_uid(uid, target_client)
-                    LoggerFactory.get_logger().info(f'Registered UID {uid.hex()} to peer {target_client}')
 
-                # Send CLIENT_TO_CLIENT_FORWARD message to server
                 forward_data = {
                     'uid': uid,
                     'target_client': target_client,
                     'source_rule_name': rule_name,
-                    'protocol': protocol
+                    'protocol': protocol,
+                    'p2p_enabled': p2p_enabled # [关键] 传递 P2P 配置给 Client B
                 }
 
-                # Add target_ip and target_port for direct mode, or target_service for service mode
                 if use_direct_mode:
                     forward_data['target_ip'] = rule['target_ip']
                     forward_data['target_port'] = rule['target_port']
@@ -276,47 +273,41 @@ class TcpForwardClient:
                     NatSerialization.dumps(forward_message, ContextUtils.get_password(), self.compress_support, self.protocol_version),
                     websocket.ABNF.OPCODE_BINARY
                 )
-                LoggerFactory.get_logger().info(f'C2C forward request sent: {rule_name} UID: {uid.hex()}')
 
-                # Register to event loop, start forwarding data
                 speed_limiter = SpeedLimiter(speed_limit) if speed_limit > 0 else None
                 self.socket_event_loop.register(client_socket, ResisterAppendData(self.handle_message, speed_limiter))
 
-            except OSError as e:
-                # Listener closed, exit loop
-                LoggerFactory.get_logger().info(f'C2C TCP listener closed: {rule_name}')
+            except OSError:
                 break
-            except Exception as e:
-                LoggerFactory.get_logger().error(f'C2C TCP accept connection error {rule_name}: {e}')
+            except Exception:
                 LoggerFactory.get_logger().error(traceback.format_exc())
-
 
     def handle_message(self, each: socket.socket, data: ResisterAppendData):
         connection = self.socket_to_socket_connection.get(each)
-        if not connection:
-            return
+        if not connection: return
 
-        try:
-            recv = each.recv(data.read_size)
-        except OSError:
-            recv = b''
+        try: recv = each.recv(data.read_size)
+        except OSError: recv = b''
 
-        # --- 发送端限速：在发送前等待 ---
         if data.speed_limiter and recv:
             wait_time = data.speed_limiter.acquire(len(recv))
-            if wait_time > 0:
-                time.sleep(wait_time)
+            if wait_time > 0: time.sleep(wait_time)
 
-        # --- 无缝切换逻辑 ---
-        if self.tunnel_manager:
-            # 尝试走 P2P 隧道
-            if self.tunnel_manager.send_data(connection.uid, recv):
-                # 如果发送成功返回 True，逻辑结束
-                if not recv: # 本地连接关闭，通知隧道
-                    self.close_connection(each)
-                return
+        # --- 路由逻辑 ---
+        # 1. 判断是否允许 P2P
+        # 2. 调用 send_data，传入 trigger_punch 参数
+        #    - 如果是 A (is_initiator=True)，允许触发打洞
+        #    - 如果是 B (is_initiator=False)，只尝试走隧道，不触发打洞
+        if (connection.p2p_enabled and
+                self.tunnel_manager and
+                self.tunnel_manager.send_data(connection.uid, recv, trigger_punch=connection.is_initiator)):
 
-                # --- 回退/初始逻辑：走 WebSocket ---
+            if not recv:
+                try: self.close_connection(each)
+                except: pass
+            return
+
+        # --- 回退 WS ---
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
             'data': {
@@ -326,18 +317,15 @@ class TcpForwardClient:
                 'ip_port': ''
             }
         }
-
         connection.sender.enqueue_message(
             NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support, self.protocol_version)
         )
 
         if not recv:
-            try:
-                self.close_connection(each)
-            except Exception:
-                pass
+            try: self.close_connection(each)
+            except: pass
 
-    def create_socket(self, name: str, uid: bytes, ip_port: str, speed_limiter: SpeedLimiter) -> bool:
+    def create_socket(self, name: str, uid: bytes, ip_port: str, speed_limiter: SpeedLimiter, p2p_enabled: bool = True) -> bool:
         if uid in self.uid_to_socket_connection:
             return True
         connection = None
@@ -357,7 +345,16 @@ class TcpForwardClient:
                 s.settimeout(5)
                 # Enable TCP_NODELAY to reduce latency (disable Nagle algorithm)
                 s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                connection = PrivateSocketConnection(uid, s, name, self.ws)
+
+                # Create connection object
+                # [关键修改] 传入 p2p_enabled 配置
+                # is_initiator=False: 作为被动连接方(Client B)，只尝试使用隧道，不主动发起打洞
+                connection = PrivateSocketConnection(
+                    uid, s, name, self.ws,
+                    p2p_enabled=p2p_enabled,
+                    is_initiator=False
+                )
+
                 self.socket_to_socket_connection[s] = connection
                 ip, port = ip_port.split(':')
                 try:
