@@ -16,6 +16,8 @@ from urllib.parse import urlparse
 import tornado
 from tornado import ioloop
 
+PROTOCOL_VERSION = 2
+
 # Try to enable high-performance event loop (20-30% boost)
 # Use winloop on Windows, uvloop on Linux/macOS
 _UVLOOP_ENABLED = False
@@ -146,7 +148,7 @@ class WebsocketClient:
         self.heart_beat_task: HeatBeatTask = heart_beat_task
         self.config_data: ClientConfigEntity = config_data
         self.compress_support: bool = config_data['server']['compress']
-        self.protocol_version: int = config_data['server']['protocol_version']
+        self.protocol_version: int = PROTOCOL_VERSION
 
         # P2P support
         self.public_ip: str = None
