@@ -32,7 +32,7 @@ setuptools.setup(
     install_requires=['tornado',
                       'typing_extensions',
                       'winloop>=0.1.0; sys_platform == "win32"',
-                      'uvloop==0.22.0; sys_platform != "win32" and python_version >= "3.7"',
+                      'uvloop>0.22.0; sys_platform != "win32" and python_version >= "3.7"',
                       'uvloop<0.15; sys_platform != "win32" and python_version < "3.7"',
                       'xxhash>=3.0.0',
                       'msgpack',

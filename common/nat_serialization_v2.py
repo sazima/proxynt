@@ -1,11 +1,14 @@
 """
 NatSerialization V2 - msgpack format (flexible, supports arbitrary fields)
 """
+import logging
 import os
 import struct
 import time
 
 import msgpack
+
+from common.logger_factory import LoggerFactory
 
 try:
     import snappy
@@ -40,14 +43,30 @@ class NatSerializationV2:
         # 处理 data_content，确保可以被 msgpack 序列化
         if data_content is not None:
             # 复制一份避免修改原数据
-            # serializable_content = dict(data_content) if isinstance(data_content, dict) else data_content
-            serializable_content = data_content
-
+            if compress:
+                serializable_content = dict(data_content) if isinstance(data_content, dict) else data_content
+            else:
+                serializable_content = data_content
             # 如果有 'data' 字段且需要压缩
             if isinstance(serializable_content, dict) and 'data' in serializable_content:
                 if compress and has_snappy and serializable_content['data']:
+                    original_size = len(serializable_content['data'])
+
                     serializable_content['data'] = snappy.snappy.compress(serializable_content['data'])
                     serializable_content['_compressed'] = True
+                    compressed_size = len(serializable_content['data'])
+
+                    if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                        if original_size > 0:
+                            ratio = compressed_size / original_size
+                            LoggerFactory.get_logger().debug(
+                                "NatSerializationV2 compress | type=%s | original=%d bytes | "
+                                "compressed=%d bytes | ratio=%.2f",
+                                type_,
+                                original_size,
+                                compressed_size,
+                                ratio
+                            )
 
             body = msgpack.packb(serializable_content, use_bin_type=True)
         else:
