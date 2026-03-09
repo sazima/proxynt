@@ -105,6 +105,9 @@ class MyWebSocketaHandler(WebSocketHandler):
             await (super(MyWebSocketaHandler, self).write_message(byte_message, binary))
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'Write message cost {time.time() - start_time}s, length: {len(message)}')
+            heart_beat_task = ContextUtils.get_heart_beat_task()
+            if heart_beat_task:
+                heart_beat_task.update_business_activity(self.client_name)
             return
         except Exception:
             LoggerFactory.get_logger().info(f'Send error: {message[:10]}')
@@ -132,9 +135,9 @@ class MyWebSocketaHandler(WebSocketHandler):
             # 智能心跳：记录业务活动（非 PING 消息）
             if self.client_name and message_dict['type_'] != MessageTypeConstant.PING:
                 from server.task.heart_beat_task import HeartBeatTask
-                heart_beat_task = ContextUtils.get_heart_beat_task()
-                if heart_beat_task:
-                    heart_beat_task.update_business_activity(self.client_name)
+                # heart_beat_task = ContextUtils.get_heart_beat_task()
+                # if heart_beat_task:
+                #     heart_beat_task.update_business_activity(self.client_name)
 
             if message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_TCP:
                 data: TcpOverWebsocketMessage = message_dict['data']

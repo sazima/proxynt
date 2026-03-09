@@ -57,7 +57,7 @@ class PublicSocketConnection:
         self.optimistic_mode = True  # Enable optimistic send by default
         self.connection_confirmed = False  # Whether connection is confirmed
         self.early_data_buffer = []  # Buffer early data (data received before connection confirmation)
-        self.max_early_data_packets = 10  # Maximum 10 buffered packets
+        self.max_early_data_packets = 65536 * 4  # Maximum buffered packets
 
     def __str__(self):
         return f'{self.uid}_{self.socket}_{self.socket_server.name}'
