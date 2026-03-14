@@ -137,6 +137,14 @@ class TcpForwardClient:
 
         # Optimistic send mode: buffer data if connection not confirmed
         if socket_connection.optimistic_mode and not socket_connection.connection_confirmed:
+            if not recv:
+                # Client closed connection before confirmation, close immediately
+                LoggerFactory.get_logger().info(f'recv empty before confirmed, close uid: {socket_connection.uid}')
+                try:
+                    self.close_connection(socket_connection)
+                except (OSError, ValueError, KeyError):
+                    LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
+                return
             if len(socket_connection.early_data_buffer) < socket_connection.max_early_data_packets:
                 socket_connection.early_data_buffer.append(recv)
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
