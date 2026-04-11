@@ -75,6 +75,7 @@ class TcpForwardClient:
         self.tornado_loop = tornado_loop
         self.close_lock = Lock()
         self.client_name_to_lock: Dict[str, AsyncioLock] = dict()
+        self.uid_to_send_lock: Dict[bytes, AsyncioLock] = dict()  # 防止data/close并发竞态
 
     @classmethod
     def get_instance(cls) -> 'TcpForwardClient':
@@ -146,7 +147,11 @@ class TcpForwardClient:
                     LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
                 return
             if len(socket_connection.early_data_buffer) < socket_connection.max_early_data_packets:
+                is_first_data = len(socket_connection.early_data_buffer) == 0
                 socket_connection.early_data_buffer.append(recv)
+                if is_first_data:
+                    # 第一块数据到达后再发送 REQUEST_TO_CONNECT，确保缓冲区已有数据
+                    Thread(target=self.request_to_connect, args=(socket_connection,)).start()
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'Buffering early data uid: {socket_connection.uid}, len: {len(recv)}, buffer_size: {len(socket_connection.early_data_buffer)}')
             else:
@@ -205,7 +210,6 @@ class TcpForwardClient:
         client_socket_connection = PublicSocketConnection(uid, client, server)
         self.uid_to_connection[uid] = client_socket_connection
         self.socket_to_connection[client] = client_socket_connection
-        Thread(target=self.request_to_connect, args=(client_socket_connection,)).start()
         append_data = ResisterAppendData(self.handle_message, register_append_data.speed_limiter)
         self.socket_event_loop.register(client, append_data)
 
@@ -230,28 +234,29 @@ class TcpForwardClient:
         if uid not in self.uid_to_connection:
             LoggerFactory.get_logger().debug(f'{message}, {uid} not in ')
             return
-        connection = self.uid_to_connection[uid]
-        socket_client = connection.socket
-        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-            LoggerFactory.get_logger().debug(f'send to socket uid: {uid}, len: {len(message)}')
-        try:
-            # 添加超时机制
-            await asyncio.wait_for(asyncio.get_event_loop().sock_sendall(socket_client, message), timeout=30)
-        except asyncio.TimeoutError:
-            LoggerFactory.get_logger().warn(f"Socket send timeout for {uid}, closing connection")
-            # 使用 ensure_future 替代 create_task，兼容 Python 3.6
-            asyncio.ensure_future(self.close_connection_async(connection))
-            return
-        except OSError as e:
-            LoggerFactory.get_logger().warn(f'{uid} os error: {e}')
-            # 使用 ensure_future 替代 create_task，兼容 Python 3.6
-            asyncio.ensure_future(self.close_connection_async(connection))
-            return
-        if not message:
-            # 使用异步方式关闭连接
-            asyncio.ensure_future(self.close_connection_async(connection))
-        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-            LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
+        if uid not in self.uid_to_send_lock:
+            self.uid_to_send_lock[uid] = AsyncioLock()
+        async with self.uid_to_send_lock[uid]:
+            connection = self.uid_to_connection.get(uid)
+            if not connection:
+                return
+            socket_client = connection.socket
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug(f'send to socket uid: {uid}, len: {len(message)}')
+            try:
+                await asyncio.wait_for(asyncio.get_event_loop().sock_sendall(socket_client, message), timeout=30)
+            except asyncio.TimeoutError:
+                LoggerFactory.get_logger().warn(f"Socket send timeout for {uid}, closing connection")
+                asyncio.ensure_future(self.close_connection_async(connection))
+                return
+            except OSError as e:
+                LoggerFactory.get_logger().warn(f'{uid} os error: {e}')
+                asyncio.ensure_future(self.close_connection_async(connection))
+                return
+            if not message:
+                asyncio.ensure_future(self.close_connection_async(connection))
+            if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                LoggerFactory.get_logger().debug(f'send to socket cost time {time.time() - send_start_time}')
 
     async def close_connection_async(self, connection: PublicSocketConnection):
         """Asynchronously close connection to avoid blocking in event loop"""
@@ -263,6 +268,7 @@ class TcpForwardClient:
             # Remove from tracking dictionaries
             self.uid_to_connection.pop(uid, None)
             self.socket_to_connection.pop(connection.socket, None)
+            self.uid_to_send_lock.pop(uid, None)
             connection.socket_server.delete_client(connection)
             # Ensure unregister before closing
             try:
