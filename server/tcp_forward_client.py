@@ -147,7 +147,11 @@ class TcpForwardClient:
                     LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
                 return
             if len(socket_connection.early_data_buffer) < socket_connection.max_early_data_packets:
+                is_first_data = len(socket_connection.early_data_buffer) == 0
                 socket_connection.early_data_buffer.append(recv)
+                if is_first_data:
+                    # 第一块数据到达后再发送 REQUEST_TO_CONNECT，确保缓冲区已有数据
+                    Thread(target=self.request_to_connect, args=(socket_connection,)).start()
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'Buffering early data uid: {socket_connection.uid}, len: {len(recv)}, buffer_size: {len(socket_connection.early_data_buffer)}')
             else:
@@ -206,7 +210,6 @@ class TcpForwardClient:
         client_socket_connection = PublicSocketConnection(uid, client, server)
         self.uid_to_connection[uid] = client_socket_connection
         self.socket_to_connection[client] = client_socket_connection
-        Thread(target=self.request_to_connect, args=(client_socket_connection,)).start()
         append_data = ResisterAppendData(self.handle_message, register_append_data.speed_limiter)
         self.socket_event_loop.register(client, append_data)
 
