@@ -56,6 +56,7 @@ class PublicSocketConnection:
         # Optimistic send mode configuration
         self.optimistic_mode = True  # Enable optimistic send by default
         self.connection_confirmed = False  # Whether connection is confirmed
+        self.connect_requested = False  # Whether REQUEST_TO_CONNECT has been sent
         self.early_data_buffer = []  # Buffer early data (data received before connection confirmation)
         self.max_early_data_packets = 65536 * 4  # Maximum buffered packets
 
@@ -147,10 +148,10 @@ class TcpForwardClient:
                     LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
                 return
             if len(socket_connection.early_data_buffer) < socket_connection.max_early_data_packets:
-                is_first_data = len(socket_connection.early_data_buffer) == 0
                 socket_connection.early_data_buffer.append(recv)
-                if is_first_data:
+                if not socket_connection.connect_requested:
                     # 第一块数据到达后再发送 REQUEST_TO_CONNECT，确保缓冲区已有数据
+                    socket_connection.connect_requested = True
                     Thread(target=self.request_to_connect, args=(socket_connection,)).start()
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug(f'Buffering early data uid: {socket_connection.uid}, len: {len(recv)}, buffer_size: {len(socket_connection.early_data_buffer)}')
