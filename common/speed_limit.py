@@ -1,5 +1,6 @@
 import time
 import threading
+import asyncio
 from typing import Tuple
 
 
@@ -59,6 +60,17 @@ class SpeedLimiter:
             # 令牌不足，计算需要等待的时间
             wait_time = -self.tokens / self.max_speed
             return wait_time
+
+    async def acquire_async(self, data_len):
+        """
+        异步版本：获取发送许可并等待
+
+        :param data_len: 要发送的数据长度（字节）
+        :return: None（直接等待，不返回等待时间）
+        """
+        wait_time = self.acquire(data_len)
+        if wait_time > 0:
+            await asyncio.sleep(wait_time)
 
     def set_max_speed(self, max_speed_mb):
         """

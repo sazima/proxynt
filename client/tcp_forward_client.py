@@ -76,12 +76,10 @@ class MessageSender:
                 try:
                     self.high_priority_queue.put_nowait(message)
                 except queue.Full:
-                    LoggerFactory.get_logger().warning("High priority queue full")
+                    LoggerFactory.get_logger().warning("High priority queue full, dropping message")
             else:
-                try:
-                    self.normal_queue.put(message, timeout=5)
-                except queue.Full:
-                    LoggerFactory.get_logger().warning("Normal queue full")
+                # 阻塞等待，不设超时，让 TCP 背压自然传导
+                self.normal_queue.put(message, block=True)
         else:
             LoggerFactory.get_logger().warning("WebSocket is not running. Cannot enqueue message.")
 

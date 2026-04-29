@@ -5,8 +5,7 @@ import time
 import traceback
 import uuid
 from collections import defaultdict
-from functools import partial
-from threading import Thread, Lock
+from threading import Lock
 from asyncio import Lock as AsyncioLock
 from typing import Dict, Tuple, List, Set
 import os
@@ -15,12 +14,11 @@ import tornado
 
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
-from common.pool import SelectPool
-from common.register_append_data import ResisterAppendData
 from common.speed_limit import SpeedLimiter
 from constant.message_type_constnat import MessageTypeConstant
 from context.context_utils import ContextUtils
 from entity.message.message_entity import MessageEntity
+
 
 
 class PublicSocketServer:
@@ -68,7 +66,6 @@ class TcpForwardClient:
     _instance = None
 
     def __init__(self, loop, tornado_loop):
-        self.socket_event_loop = SelectPool()
         self.listen_socket_to_public_server: Dict[socket.socket, PublicSocketServer] = dict()
         self.client_name_to_public_server_set: Dict[str, Set[PublicSocketServer]] = defaultdict(set)
         self.uid_to_connection: Dict[bytes, PublicSocketConnection] = dict()  # uid 对应的连接公网端口的客户端
@@ -82,7 +79,6 @@ class TcpForwardClient:
     def get_instance(cls) -> 'TcpForwardClient':
         if cls._instance is None:
             cls._instance = cls(asyncio.get_event_loop(), tornado.ioloop.IOLoop.current())
-            Thread(target=cls._instance.socket_event_loop.run).start()
         return cls._instance
 
     async def register_listen_server(self, s: socket.socket, name: str, ip_port: str, websocket_handler: 'MyWebSocketaHandler', speed_limit_size: float):
@@ -90,11 +86,11 @@ class TcpForwardClient:
         if client_name not in self.client_name_to_lock:
             self.client_name_to_lock[client_name] = AsyncioLock()
         async with self.client_name_to_lock.get(client_name):
-            append_data = ResisterAppendData(self.start_accept, SpeedLimiter(speed_limit_size) if speed_limit_size else None)
             server = PublicSocketServer(s, name, ip_port, websocket_handler, speed_limit_size)
             self.listen_socket_to_public_server[s] = server
             self.client_name_to_public_server_set[client_name].add(server)
-            self.socket_event_loop.register(s, append_data)
+            # 启动 asyncio accept 循环（Python 3.6 兼容）
+            asyncio.ensure_future(self._accept_loop(server))
 
     async def close_by_client_name(self, client_name: str):
         if client_name not in self.client_name_to_public_server_set:
@@ -111,13 +107,11 @@ class TcpForwardClient:
                 server_socket_list.append(server)
             for c in client_connection_list:
                 c.socket.close()
-                await self.socket_event_loop.async_unregister(c.socket)
-                self.socket_to_connection.pop(c.socket)
-                self.uid_to_connection.pop(c.uid)
+                self.socket_to_connection.pop(c.socket, None)
+                self.uid_to_connection.pop(c.uid, None)
             for s in server_socket_list:
-                self.listen_socket_to_public_server.pop(s.socket_server)
+                self.listen_socket_to_public_server.pop(s.socket_server, None)
                 try:
-                    await self.socket_event_loop.async_unregister(s.socket_server)
                     s.socket_server.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
@@ -125,97 +119,115 @@ class TcpForwardClient:
             self.client_name_to_public_server_set.pop(client_name)
         self.client_name_to_lock.pop(client_name)
 
-    def handle_message(self, each: socket.socket, data: ResisterAppendData):
-        # 发送到websocket
-        each: socket.socket
+    async def _accept_loop(self, server: PublicSocketServer):
+        """Accept loop for incoming connections (asyncio coroutine)"""
+        loop = asyncio.get_event_loop()
+        server_socket = server.socket_server
+
         try:
-            recv = each.recv(data.read_size)
-        except ConnectionResetError:
-            recv = b''
-        # client = self.uid_to_client[uid]
-        if each not in self.socket_to_connection:
-            return
-        socket_connection = self.socket_to_connection[each]
-
-        # Optimistic send mode: buffer data if connection not confirmed
-        if socket_connection.optimistic_mode and not socket_connection.connection_confirmed:
-            if not recv:
-                # Client closed connection before confirmation, close immediately
-                LoggerFactory.get_logger().info(f'recv empty before confirmed, close uid: {socket_connection.uid}')
+            while True:
                 try:
-                    self.close_connection(socket_connection)
-                except (OSError, ValueError, KeyError):
-                    LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
-                return
-            if len(socket_connection.early_data_buffer) < socket_connection.max_early_data_packets:
-                socket_connection.early_data_buffer.append(recv)
-                if not socket_connection.connect_requested:
-                    # 第一块数据到达后再发送 REQUEST_TO_CONNECT，确保缓冲区已有数据
-                    socket_connection.connect_requested = True
-                    Thread(target=self.request_to_connect, args=(socket_connection,)).start()
-                if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-                    LoggerFactory.get_logger().debug(f'Buffering early data uid: {socket_connection.uid}, len: {len(recv)}, buffer_size: {len(socket_connection.early_data_buffer)}')
-            else:
-                # Too much buffered data, connection may have failed, close connection
-                LoggerFactory.get_logger().warning(f'Too much early data buffered, closing connection uid: {socket_connection.uid}')
-                try:
-                    self.close_connection(socket_connection)
-                except (OSError, ValueError, KeyError):
-                    LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
-            return
+                    client, address = await loop.sock_accept(server_socket)
+                    # 启用 TCP_NODELAY 减少延迟
+                    client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-        # --- 发送端限速：在发送前等待 ---
-        if data.speed_limiter and recv:
-            wait_time = data.speed_limiter.acquire(len(recv))
-            if wait_time > 0:
-                time.sleep(wait_time)
+                    LoggerFactory.get_logger().info(f'Received connection from: {address}')
 
-        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
-            LoggerFactory.get_logger().debug(f'send to ws uid: {socket_connection.uid}, len: {len(recv)}')
-        send_message: MessageEntity = {
-            'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
-            'data': {
-                'name': socket_connection.socket_server.name,
-                'data': recv,
-                'uid': socket_connection.uid,
-                'ip_port': socket_connection.socket_server.ip_port
-            }
-        }
-        if not recv:
-            LoggerFactory.get_logger().info('recv empty, close')
-            try:
-                self.close_connection(socket_connection)
-            except (OSError, ValueError, KeyError):
-                LoggerFactory.get_logger().error(f'close error: {traceback.format_exc()}')
-        try:
-            handler = socket_connection.socket_server.websocket_handler
-            is_compress = handler.compress_support
-            protocol_version = handler.protocol_version
-            self.tornado_loop.add_callback(
-                partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), is_compress, protocol_version)), True)
-        except Exception:
+                    # 创建连接对象
+                    uid = os.urandom(4)
+                    client_socket_connection = PublicSocketConnection(uid, client, server)
+                    self.uid_to_connection[uid] = client_socket_connection
+                    self.socket_to_connection[client] = client_socket_connection
+
+                    # 启动转发协程（Python 3.6 兼容）
+                    asyncio.ensure_future(self._forward_socket_to_ws(client_socket_connection))
+
+                except OSError as e:
+                    LoggerFactory.get_logger().error(f'Accept error: {e}')
+                    break
+        except Exception as e:
+            LoggerFactory.get_logger().error(f'Accept loop error: {e}')
             LoggerFactory.get_logger().error(traceback.format_exc())
 
-    def start_accept(self, server_socket: socket, register_append_data: ResisterAppendData):
-        try:
-            client, address = server_socket.accept()
-            client: socket.socket
-            # 启用 TCP_NODELAY 减少延迟（禁用 Nagle 算法）
-            client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except OSError:
-            return
-        LoggerFactory.get_logger().info(f'Received connection from: {address}')
-        server = self.listen_socket_to_public_server[server_socket]
-        # Current server client also corresponds to a client connecting to internal network service
-        uid = os.urandom(4)
-        client_socket_connection = PublicSocketConnection(uid, client, server)
-        self.uid_to_connection[uid] = client_socket_connection
-        self.socket_to_connection[client] = client_socket_connection
-        append_data = ResisterAppendData(self.handle_message, register_append_data.speed_limiter)
-        self.socket_event_loop.register(client, append_data)
+    async def _forward_socket_to_ws(self, connection: PublicSocketConnection):
+        """从公网 socket 读取，转发到客户端 WebSocket（asyncio 协程）"""
+        loop = asyncio.get_event_loop()
+        sock = connection.socket
+        handler = connection.socket_server.websocket_handler
+        speed_limit_size = connection.socket_server.speed_limit_size
 
-    def request_to_connect(self, client_socket_connection: PublicSocketConnection):
-        """Request connection to client"""
+        limiter = SpeedLimiter(speed_limit_size) if speed_limit_size > 0 else None
+
+        try:
+            # Optimistic send mode: wait for connection confirmation
+            if connection.optimistic_mode and not connection.connection_confirmed:
+                # Buffer early data until connection is confirmed
+                while not connection.connection_confirmed:
+                    try:
+                        data = await asyncio.wait_for(loop.sock_recv(sock, 65536), timeout=0.1)
+                    except asyncio.TimeoutError:
+                        continue
+
+                    if not data:
+                        # Client closed before confirmation
+                        LoggerFactory.get_logger().info(f'recv empty before confirmed, close uid: {connection.uid.hex()}')
+                        await self.close_connection_async(connection)
+                        return
+
+                    if len(connection.early_data_buffer) < connection.max_early_data_packets:
+                        connection.early_data_buffer.append(data)
+                        if not connection.connect_requested:
+                            connection.connect_requested = True
+                            await self._request_to_connect_async(connection)
+                        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                            LoggerFactory.get_logger().debug(f'Buffering early data uid: {connection.uid.hex()}, len: {len(data)}, buffer_size: {len(connection.early_data_buffer)}')
+                    else:
+                        LoggerFactory.get_logger().warning(f'Too much early data buffered, closing connection uid: {connection.uid.hex()}')
+                        await self.close_connection_async(connection)
+                        return
+
+            # Normal forwarding loop
+            while True:
+                data = await loop.sock_recv(sock, 65536)
+
+                # 限速
+                if limiter and data:
+                    wait_time = limiter.acquire(len(data))
+                    if wait_time > 0:
+                        await asyncio.sleep(wait_time)
+
+                # 发送到 WebSocket
+                send_message: MessageEntity = {
+                    'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
+                    'data': {
+                        'name': connection.socket_server.name,
+                        'data': data,
+                        'uid': connection.uid,
+                        'ip_port': connection.socket_server.ip_port
+                    }
+                }
+
+                if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                    LoggerFactory.get_logger().debug(f'send to ws uid: {connection.uid.hex()}, len: {len(data)}')
+
+                await handler.write_message(
+                    NatSerialization.dumps(send_message, ContextUtils.get_password(),
+                                         handler.compress_support, handler.protocol_version),
+                    binary=True
+                )
+
+                if not data:
+                    LoggerFactory.get_logger().info('recv empty, close')
+                    break
+
+        except Exception as e:
+            LoggerFactory.get_logger().error(f'Forward error uid {connection.uid.hex()}: {e}')
+            LoggerFactory.get_logger().error(traceback.format_exc())
+        finally:
+            await self.close_connection_async(connection)
+
+    async def _request_to_connect_async(self, client_socket_connection: PublicSocketConnection):
+        """Request connection to client (async version)"""
         send_message: MessageEntity = {
             'type_': MessageTypeConstant.REQUEST_TO_CONNECT,
             'data': {
@@ -226,9 +238,15 @@ class TcpForwardClient:
             }
         }
         handler = client_socket_connection.socket_server.websocket_handler
-        self.tornado_loop.add_callback(
-            partial(handler.write_message, NatSerialization.dumps(send_message, ContextUtils.get_password(), handler.compress_support, handler.protocol_version)), True
+        await handler.write_message(
+            NatSerialization.dumps(send_message, ContextUtils.get_password(),
+                                 handler.compress_support, handler.protocol_version),
+            binary=True
         )
+
+    def request_to_connect(self, client_socket_connection: PublicSocketConnection):
+        """Request connection to client (legacy sync wrapper)"""
+        asyncio.ensure_future(self._request_to_connect_async(client_socket_connection))
 
     async def send_to_socket(self, uid: bytes, message: bytes):
         send_start_time = time.time()

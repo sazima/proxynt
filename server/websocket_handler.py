@@ -114,8 +114,8 @@ class MyWebSocketaHandler(WebSocketHandler):
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise
 
-    def on_message(self, m_bytes):
-        asyncio.ensure_future(self.on_message_async(m_bytes))
+    async def on_message(self, m_bytes):
+        await self.on_message_async(m_bytes)
 
     async def on_message_async(self, message):
         tcp_forward_client = TcpForwardClient.get_instance()
