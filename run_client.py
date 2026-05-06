@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import queue
 import signal
 import socket
 import sys
@@ -150,6 +151,11 @@ class WebsocketClient:
         self.compress_support: bool = config_data['server']['compress']
         self.protocol_version: int = PROTOCOL_VERSION
 
+        # Message processing queue to avoid blocking WebSocket receive thread
+        self.message_queue = queue.Queue(maxsize=2048)
+        self.message_processor_running = False
+        self.message_processor_thread = Thread(target=self._process_messages, daemon=True)
+
         # P2P support
         self.public_ip: str = None
         self.public_port: int = None
@@ -183,6 +189,40 @@ class WebsocketClient:
         self.pending_sessions: Dict[str, dict] = {}
 
     def on_message(self, ws, message: bytes):
+        """
+        WebSocket message callback - enqueue message for async processing
+        This method must return quickly to avoid blocking WebSocket receive thread
+        """
+        try:
+            # Quick enqueue without blocking
+            self.message_queue.put(message, block=False)
+        except queue.Full:
+            LoggerFactory.get_logger().error("Message queue full, dropping message")
+
+    def _process_messages(self):
+        """
+        Message processing thread - processes messages sequentially to maintain order
+        """
+        while True:
+            try:
+                # Block waiting for messages
+                message = self.message_queue.get(timeout=1)
+
+                # Process the message
+                self._handle_message(message)
+
+                self.message_queue.task_done()
+            except queue.Empty:
+                # Check if we should stop
+                if not self.message_processor_running:
+                    break
+            except Exception:
+                LoggerFactory.get_logger().error(traceback.format_exc())
+
+    def _handle_message(self, message: bytes):
+        """
+        Handle a single message - extracted from original on_message logic
+        """
         try:
             message_data: MessageEntity = NatSerialization.loads(message, ContextUtils.get_password(), self.compress_support, self.protocol_version)
             self.heart_beat_task.set_recv_heart_beat_time(time.time())
@@ -412,6 +452,14 @@ class WebsocketClient:
         with OPEN_CLOSE_LOCK:
             try:
                 LoggerFactory.get_logger().info('WS Open: Resetting clients...')
+
+                # Start message processing thread
+                self.message_processor_running = True
+                if not self.message_processor_thread.is_alive():
+                    self.message_processor_thread = Thread(target=self._process_messages, daemon=True)
+                    self.message_processor_thread.start()
+                    LoggerFactory.get_logger().info('Message processor thread started')
+
                 self.heart_beat_task.is_running = False
                 self.forward_client.close()
                 self.udp_forward_client.close()
@@ -459,6 +507,11 @@ class WebsocketClient:
     def on_close(self, ws, a, b):
         with OPEN_CLOSE_LOCK:
             LoggerFactory.get_logger().info(f'WS Closed: {a}, {b}')
+
+            # Stop message processing thread
+            self.message_processor_running = False
+            LoggerFactory.get_logger().info('Message processor thread stopping')
+
             self.heart_beat_task.is_running = False
             self.forward_client.close()
             # Stop tunnel manager

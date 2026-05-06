@@ -174,6 +174,29 @@ class TcpForwardClient:
                         await self.close_connection_async(connection)
                         return
 
+                    # Re-check after await: CONNECT_CONFIRMED may have arrived during sock_recv,
+                    # which sets connection_confirmed=True, sends buffered data, and clears the buffer.
+                    # If we append to the buffer now, the data would be lost.
+                    if connection.connection_confirmed:
+                        # Connection confirmed during await, send this data directly
+                        send_message: MessageEntity = {
+                            'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
+                            'data': {
+                                'name': connection.socket_server.name,
+                                'data': data,
+                                'uid': connection.uid,
+                                'ip_port': connection.socket_server.ip_port
+                            }
+                        }
+                        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                            LoggerFactory.get_logger().debug(f'Confirmed during recv, send directly uid: {connection.uid.hex()}, len: {len(data)}')
+                        await handler.write_message(
+                            NatSerialization.dumps(send_message, ContextUtils.get_password(),
+                                                 handler.compress_support, handler.protocol_version),
+                            binary=True
+                        )
+                        break  # Exit to normal forwarding loop
+
                     if len(connection.early_data_buffer) < connection.max_early_data_packets:
                         connection.early_data_buffer.append(data)
                         if not connection.connect_requested:
@@ -289,11 +312,6 @@ class TcpForwardClient:
             self.socket_to_connection.pop(connection.socket, None)
             self.uid_to_send_lock.pop(uid, None)
             connection.socket_server.delete_client(connection)
-            # Ensure unregister before closing
-            try:
-                await self.socket_event_loop.async_unregister(connection.socket)
-            except Exception as e:
-                LoggerFactory.get_logger().error(f'Error unregistering socket: {e}')
 
             # Close socket
             try:
@@ -306,11 +324,9 @@ class TcpForwardClient:
     def close_connection(self, connection: PublicSocketConnection):
         try:
             LoggerFactory.get_logger().info(f'Closing connection {connection.uid}')
-            # with self.close_lock:
             uid = connection.uid
             if uid not in self.uid_to_connection:
                 return
-            self.socket_event_loop.unregister(connection.socket)
             self.uid_to_connection.pop(uid)
             self.socket_to_connection.pop(connection.socket)
             connection.socket_server.delete_client(connection)
@@ -325,12 +341,12 @@ class TcpForwardClient:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(('', port))
         s.listen(5)
+        s.setblocking(False)  # Required for asyncio
         return s
 
     def close(self):
         """Actually no close operation, starts when program starts"""
-        # self.is_running = False
-        self.socket_event_loop.stop()
+        pass
         # close client
         # try:
         #     for client, uid in self.client_to_uid.items():
