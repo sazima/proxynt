@@ -1,0 +1,32 @@
+*.pyc
+*~
+*\#
+.\#*
+
+build
+.build/
+dist
+*.egg-info
+
+.cache/
+compliance/reports/
+.eggs
+.vscode
+
+# venv
+venv/
+.venv/
+.env/
+
+# PyCharm
+.idea/
+
+# Sphinx documentation
+docs/build/
+
+# Code coverage
+.coverage
+coverage.xml
+
+# AI tools
+CLAUDE.md
