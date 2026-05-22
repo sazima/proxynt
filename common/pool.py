@@ -168,12 +168,16 @@ class SelectPool:
                     return
                 try:
                     if client not in self.socket_to_register_lock:
+                        LoggerFactory.get_logger().warning('[POOL] re-register skipped: lock removed, fd=%s' % client.fileno())
                         return
                     self.selector.register(client, EVENT_READ, data)
                 except Exception:
-                    LoggerFactory.get_logger().error(traceback.format_exc())
+                    LoggerFactory.get_logger().error('[POOL] re-register failed fd=%s: %s' % (client.fileno(), traceback.format_exc()))
                 finally:
                     lock.release()
+            else:
+                if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+                    LoggerFactory.get_logger().debug('[POOL] re-register skipped: lock is None, fd=%s' % client.fileno())
             # self.
             # if client in self.socket_to_recv_lock:
             #     self.socket_to_recv_lock[client].release()
