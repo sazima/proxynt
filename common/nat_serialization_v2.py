@@ -42,12 +42,11 @@ class NatSerializationV2:
 
         # 处理 data_content，确保可以被 msgpack 序列化
         if data_content is not None:
-            # 复制一份避免修改原数据
-            if compress:
-                serializable_content = dict(data_content) if isinstance(data_content, dict) else data_content
-            else:
-                serializable_content = data_content
-            # 如果有 'data' 字段且需要压缩
+            serializable_content = data_content
+            # 如果有 'data' 字段且需要压缩，才复制一份避免修改原数据
+            if (compress and has_snappy and isinstance(data_content, dict)
+                    and 'data' in data_content and data_content['data']):
+                serializable_content = dict(data_content)
             if isinstance(serializable_content, dict) and 'data' in serializable_content:
                 if compress and has_snappy and serializable_content['data']:
                     original_size = len(serializable_content['data'])

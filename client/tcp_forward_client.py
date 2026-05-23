@@ -176,7 +176,7 @@ class TcpForwardClient:
         if data.speed_limiter and recv:
             wait_time = data.speed_limiter.acquire(len(recv))
             if wait_time > 0:
-                time.sleep(wait_time)
+                self.socket_event_loop.pause_and_resume_later(each, wait_time)
 
         if self.tunnel_manager:
             if self.tunnel_manager.send_data(connection.uid, recv):
@@ -366,9 +366,15 @@ class TcpForwardClient:
             return
         try:
             s = connection.socket
+            s.settimeout(30)
             s.sendall(msg)
+            s.settimeout(None)
             if not msg:
                 self.close_connection(s)
+        except socket.timeout:
+            LoggerFactory.get_logger().warning('sendall timeout, closing uid: %s' % connection.uid.hex())
+            self.close_connection(s)
+            self.close_remote_socket(connection)
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
             self.close_remote_socket(connection)

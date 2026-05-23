@@ -188,23 +188,41 @@ class UdpForwardClient:
                 LoggerFactory.get_logger().error(traceback.format_exc())
 
     def _udp_receive_loop(self):
+        import select as _select
         LoggerFactory.get_logger().info('UDP receive thread started')
         while self.running:
             connections = list(self.uid_to_connection.values())
+            if not connections:
+                time.sleep(0.1)
+                continue
+            sock_to_conn = {}
             for conn in connections:
                 try:
                     conn.socket.setblocking(False)
-                    try:
-                        data, addr = conn.socket.recvfrom(65536)
-                        if data:
-                            self._handle_udp_data(conn, data, addr)
-                    except (BlockingIOError, socket.error):
-                        pass
+                    sock_to_conn[conn.socket] = conn
+                except Exception:
+                    pass
+            if not sock_to_conn:
+                time.sleep(0.1)
+                continue
+            try:
+                readable, _, _ = _select.select(list(sock_to_conn.keys()), [], [], 0.5)
+            except (OSError, ValueError):
+                time.sleep(0.1)
+                continue
+            for sock in readable:
+                conn = sock_to_conn.get(sock)
+                if not conn:
+                    continue
+                try:
+                    data, addr = sock.recvfrom(65536)
+                    if data:
+                        self._handle_udp_data(conn, data, addr)
+                except (BlockingIOError, socket.error):
+                    pass
                 except Exception as e:
                     LoggerFactory.get_logger().error('UDP data receive error: %s' % e)
                     LoggerFactory.get_logger().error(traceback.format_exc())
-
-            time.sleep(0.001)
 
     def _handle_udp_data(self, conn: UdpSocketConnection, data: bytes, addr):
         if conn.speed_limiter and data:

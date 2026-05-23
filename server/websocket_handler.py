@@ -4,7 +4,6 @@ import logging
 import time
 import traceback
 from asyncio import Lock
-from concurrent.futures import ThreadPoolExecutor
 from json import JSONDecodeError
 from typing import List, Dict, Set, Tuple
 
@@ -31,7 +30,7 @@ from exceptions.replay_error import ReplayError
 from exceptions.signature_error import SignatureError
 from server.tcp_forward_client import TcpForwardClient
 
-p = ThreadPoolExecutor(max_workers=100)
+MAX_CONCURRENT_MESSAGES = 64
 
 
 class MyWebSocketaHandler(WebSocketHandler):
@@ -63,6 +62,7 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     def open(self, *args: str, **kwargs: str):
         self.lock = Lock()
+        self._msg_sem = asyncio.Semaphore(MAX_CONCURRENT_MESSAGES)
         self.client_name = None
         self.version = None
 
@@ -115,7 +115,14 @@ class MyWebSocketaHandler(WebSocketHandler):
             raise
 
     def on_message(self, m_bytes):
-        asyncio.ensure_future(self.on_message_async(m_bytes))
+        asyncio.ensure_future(self._on_message_with_backpressure(m_bytes))
+
+    async def _on_message_with_backpressure(self, m_bytes):
+        await self._msg_sem.acquire()
+        try:
+            await self.on_message_async(m_bytes)
+        finally:
+            self._msg_sem.release()
 
     async def on_message_async(self, message):
         tcp_forward_client = TcpForwardClient.get_instance()

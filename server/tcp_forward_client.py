@@ -111,13 +111,13 @@ class TcpForwardClient:
                 server_socket_list.append(server)
             for c in client_connection_list:
                 c.socket.close()
-                await self.socket_event_loop.async_unregister(c.socket)
+                self.socket_event_loop.unregister(c.socket)
                 self.socket_to_connection.pop(c.socket)
                 self.uid_to_connection.pop(c.uid)
             for s in server_socket_list:
                 self.listen_socket_to_public_server.pop(s.socket_server)
                 try:
-                    await self.socket_event_loop.async_unregister(s.socket_server)
+                    self.socket_event_loop.unregister(s.socket_server)
                     s.socket_server.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass
@@ -164,11 +164,11 @@ class TcpForwardClient:
                     LoggerFactory.get_logger().error(f'Close error: {traceback.format_exc()}')
             return
 
-        # --- 发送端限速：在发送前等待 ---
+        # --- 发送端限速：暂停读取，延迟恢复 ---
         if data.speed_limiter and recv:
             wait_time = data.speed_limiter.acquire(len(recv))
             if wait_time > 0:
-                time.sleep(wait_time)
+                self.socket_event_loop.pause_and_resume_later(each, wait_time)
 
         if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
             LoggerFactory.get_logger().debug(f'send to ws uid: {socket_connection.uid}, len: {len(recv)}')
@@ -235,9 +235,8 @@ class TcpForwardClient:
         if uid not in self.uid_to_connection:
             LoggerFactory.get_logger().debug(f'{message}, {uid} not in ')
             return
-        if uid not in self.uid_to_send_lock:
-            self.uid_to_send_lock[uid] = AsyncioLock()
-        async with self.uid_to_send_lock[uid]:
+        lock = self.uid_to_send_lock.setdefault(uid, AsyncioLock())
+        async with lock:
             connection = self.uid_to_connection.get(uid)
             if not connection:
                 return
@@ -273,7 +272,7 @@ class TcpForwardClient:
             connection.socket_server.delete_client(connection)
             # Ensure unregister before closing
             try:
-                await self.socket_event_loop.async_unregister(connection.socket)
+                self.socket_event_loop.unregister(connection.socket)
             except Exception as e:
                 LoggerFactory.get_logger().error(f'Error unregistering socket: {e}')
 
@@ -288,13 +287,13 @@ class TcpForwardClient:
     def close_connection(self, connection: PublicSocketConnection):
         try:
             LoggerFactory.get_logger().info(f'Closing connection {connection.uid}')
-            # with self.close_lock:
             uid = connection.uid
             if uid not in self.uid_to_connection:
                 return
             self.socket_event_loop.unregister(connection.socket)
-            self.uid_to_connection.pop(uid)
-            self.socket_to_connection.pop(connection.socket)
+            self.uid_to_connection.pop(uid, None)
+            self.socket_to_connection.pop(connection.socket, None)
+            self.uid_to_send_lock.pop(uid, None)
             connection.socket_server.delete_client(connection)
             connection.socket.close()
         except Exception:
@@ -306,7 +305,7 @@ class TcpForwardClient:
         s: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(('', port))
-        s.listen(5)
+        s.listen(256)
         return s
 
     def close(self):
