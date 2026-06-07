@@ -562,15 +562,25 @@ class AdminC2CRuleHandler(RequestHandler):
             self.write({'code': 500, 'data': '', 'msg': '服务器错误'})
 
     def _detect_circular_dependency(self, new_rule: dict, all_rules: list) -> bool:
-        """检测是否存在循环依赖 (DFS)"""
-        # 构建有向图: source → target
+        """检测是否存在循环依赖 (基于端口级别的DFS)
+
+        只有当规则链形成端口级别的转发环路时才算循环依赖。
+        例如: A:52222 → B:22, B:22 → A:52222 是循环(B的22端口既是目标又是源)
+        但: A:52222 → B:22, B:9100 → A:9100 不是循环(端口不同，互不影响)
+        """
+        # 构建有向图: (client, port) → (client, port)
+        # 边: (source_client, local_port) → (target_client, target_port)
         graph = {}
         for rule in all_rules:
-            source = rule['source_client']
-            target = rule['target_client']
-            if source not in graph:
-                graph[source] = []
-            graph[source].append(target)
+            target_port = rule.get('target_port')
+            if target_port is None:
+                # service模式没有明确的target_port，不会形成转发环路
+                continue
+            source_node = (rule['source_client'], int(rule['local_port']))
+            target_node = (rule['target_client'], int(target_port))
+            if source_node not in graph:
+                graph[source_node] = []
+            graph[source_node].append(target_node)
 
         # DFS 检测环
         def has_cycle(node, visited, rec_stack):
@@ -587,7 +597,6 @@ class AdminC2CRuleHandler(RequestHandler):
             rec_stack.remove(node)
             return False
 
-        # 从新规则的源客户端开始检测
         visited = set()
         for node in graph:
             if node not in visited:
