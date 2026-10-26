@@ -74,6 +74,8 @@ class NatSerializationV1:
                                    magic, mode_flag, len(target_client), len(target_service), len(source_rule_name), len(protocol),
                                    uid, target_client, target_service, source_rule_name, protocol)
 
+        elif type_ in (MessageTypeConstant.FLOW_PAUSE, MessageTypeConstant.FLOW_RESUME):
+            body = struct.pack(f'{UID_LEN}s', data['data']['uid'])
         elif type_ == MessageTypeConstant.PUSH_CONFIG:
             body = json.dumps(data).encode()
         elif type_ == MessageTypeConstant.PING:
@@ -187,6 +189,13 @@ class NatSerializationV1:
             return_data: MessageEntity = {
                 'type_': type_.decode(),
                 'data': data
+            }
+            return return_data
+
+        elif type_.decode() in (MessageTypeConstant.FLOW_PAUSE, MessageTypeConstant.FLOW_RESUME):
+            return_data: MessageEntity = {
+                'type_': type_.decode(),
+                'data': {'uid': body[:UID_LEN]}
             }
             return return_data
 

@@ -29,3 +29,8 @@ class MessageTypeConstant:
     P2P_EXCHANGE = 'h'        # UDP exchange to establish NAT mapping
     P2P_PEER_INFO = 'i'       # Server sends peer's actual UDP port
     P2P_PUNCH_REQUEST = 'j'   # Request to initiate P2P hole punching
+
+    # 按连接流控: 接收方某个 uid 积压过多时通知发送方暂停/恢复读取该 uid 的数据源
+    # 仅在双方通过 PUSH_CONFIG 协商支持后发送 (旧版本反序列化未知类型会报错)
+    FLOW_PAUSE = 'k'
+    FLOW_RESUME = 'l'

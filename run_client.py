@@ -79,6 +79,7 @@ class WsSender:
     """Thread-safe WebSocket sender wrapping Tornado WebSocketClientConnection."""
 
     MAX_PENDING_WRITES = 32
+    WRITE_BACKPRESSURE_TIMEOUT = 10
 
     def __init__(self):
         self._ws = None
@@ -104,24 +105,30 @@ class WsSender:
             io.add_callback(ws.write_message, data, binary=True)
             return
 
-        acquired = self._write_sem.acquire(timeout=10)
-        if not acquired or self._ws is None:
+        write_sem = self._write_sem
+        acquired = write_sem.acquire(timeout=self.WRITE_BACKPRESSURE_TIMEOUT)
+        if self._ws is None:
+            if acquired:
+                write_sem.release()
             return
-        io.add_callback(self._do_write, data)
+        if not acquired:
+            # 不能丢弃: TCP 流中间少一块数据会导致对端协议错乱(如 sshd Bad packet length)
+            LoggerFactory.get_logger().warning(f'websocket write backlog over {self.WRITE_BACKPRESSURE_TIMEOUT}s, send without backpressure')
+        io.add_callback(self._do_write, data, write_sem if acquired else None)
 
-    def _do_write(self, data):
+    def _do_write(self, data, write_sem):
         ws = self._ws
         if ws is None:
-            self._write_sem.release()
+            if write_sem:
+                write_sem.release()
             return
         try:
             future = ws.write_message(data, binary=True)
-            ioloop.IOLoop.current().add_future(future, lambda f: self._on_write_done())
+            if write_sem:
+                ioloop.IOLoop.current().add_future(future, lambda f: write_sem.release())
         except Exception:
-            self._write_sem.release()
-
-    def _on_write_done(self):
-        self._write_sem.release()
+            if write_sem:
+                write_sem.release()
 
     def close(self):
         ws = self._ws
@@ -295,6 +302,7 @@ class WebsocketClient:
                 push_config: PushConfigEntity = message_data['data']
                 self.public_ip = push_config.get('public_ip')
                 self.public_port = push_config.get('public_port')
+                self.forward_client.flow_control_enabled = bool(push_config.get('server_flow_control', False))
 
                 for d in push_config['config_list']:
                     if d.get('speed_limit'):
@@ -305,6 +313,11 @@ class WebsocketClient:
                     LoggerFactory.get_logger().info('Received %d C2C rules' % len(c2c_rules))
                     self.forward_client.setup_c2c_tcp_listeners(c2c_rules)
                     self.udp_forward_client.setup_c2c_udp_listeners(c2c_rules)
+
+            elif msg_type == MessageTypeConstant.FLOW_PAUSE:
+                self.forward_client.set_local_reading_paused(message_data['data']['uid'], True)
+            elif msg_type == MessageTypeConstant.FLOW_RESUME:
+                self.forward_client.set_local_reading_paused(message_data['data']['uid'], False)
 
             # P2P punch disabled
             elif msg_type == MessageTypeConstant.P2P_PUNCH_REQUEST:
@@ -337,7 +350,8 @@ class WebsocketClient:
                     'config_list': push_client_data,
                     "client_name": client_name,
                     'version': SystemConstant.VERSION,
-                    'p2p_supported': False
+                    'p2p_supported': False,
+                    'flow_control': True
                 }
                 message: MessageEntity = {
                     'type_': MessageTypeConstant.PUSH_CONFIG,

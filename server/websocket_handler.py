@@ -5,7 +5,7 @@ import time
 import traceback
 from asyncio import Lock
 from json import JSONDecodeError
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Optional
 
 from server.udp_forward_client import UdpForwardClient
 
@@ -15,7 +15,7 @@ try:
 except ModuleNotFoundError:
     has_snappy = False
 
-from tornado.websocket import WebSocketHandler
+from tornado.websocket import WebSocketHandler, WebSocketClosedError
 
 from common.nat_serialization import NatSerialization
 from common.logger_factory import LoggerFactory
@@ -30,7 +30,8 @@ from exceptions.replay_error import ReplayError
 from exceptions.signature_error import SignatureError
 from server.tcp_forward_client import TcpForwardClient
 
-MAX_CONCURRENT_MESSAGES = 64
+WRITE_BUFFER_HIGH_WATER = 1 * 1024 * 1024  # 目标 websocket 写缓冲超过该值时暂停读取来源 websocket
+WRITE_DRAIN_TIMEOUT = 30
 
 
 class MyWebSocketaHandler(WebSocketHandler):
@@ -42,6 +43,7 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     compress_support: bool = False  # Whether snappy compression is supported
     protocol_version: int = 1  # Serialization protocol version (1=binary, 2=msgpack)
+    flow_control_support: bool = False  # 客户端是否支持按连接流控 (FLOW_PAUSE / FLOW_RESUME)
 
     # P2P support
     p2p_supported: bool = False  # Whether client supports P2P
@@ -62,7 +64,7 @@ class MyWebSocketaHandler(WebSocketHandler):
 
     def open(self, *args: str, **kwargs: str):
         self.lock = Lock()
-        self._msg_sem = asyncio.Semaphore(MAX_CONCURRENT_MESSAGES)
+        self._pending_write_bytes = 0
         self.client_name = None
         self.version = None
 
@@ -102,27 +104,77 @@ class MyWebSocketaHandler(WebSocketHandler):
         start_time = time.time()
         try:
             byte_message = bytes(message)
-            await (super(MyWebSocketaHandler, self).write_message(byte_message, binary))
+            await self._write_nowait(byte_message, binary)
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                 LoggerFactory.get_logger().debug(f'Write message cost {time.time() - start_time}s, length: {len(message)}')
-            heart_beat_task = ContextUtils.get_heart_beat_task()
-            if heart_beat_task:
-                heart_beat_task.update_business_activity(self.client_name)
             return
         except Exception:
             LoggerFactory.get_logger().info(f'Send error: {message[:10]}')
             LoggerFactory.get_logger().error(traceback.format_exc())
             raise
 
-    def on_message(self, m_bytes):
-        asyncio.ensure_future(self._on_message_with_backpressure(m_bytes))
+    def _write_nowait(self, message: bytes, binary=True) -> asyncio.Future:
+        """同步写入 tornado 写缓冲区(保证顺序), 返回 flush 完成的 future"""
+        future = super(MyWebSocketaHandler, self).write_message(message, binary)
+        length = len(message)
+        self._pending_write_bytes += length
 
-    async def _on_message_with_backpressure(self, m_bytes):
-        await self._msg_sem.acquire()
+        def on_done(f):
+            self._pending_write_bytes -= length
+            if not f.cancelled():
+                f.exception()  # 避免 "exception was never retrieved"
+
+        future.add_done_callback(on_done)
+        heart_beat_task = ContextUtils.get_heart_beat_task()
+        if heart_beat_task:
+            heart_beat_task.update_business_activity(self.client_name)
+        return future
+
+    def forward_message(self, message_dict: MessageEntity) -> Optional[asyncio.Future]:
+        """
+        转发消息给本 handler 对应的客户端, 不等待 flush
+        写缓冲积压超过高水位时返回 future, 调用方 await 它做背压; 否则返回 None
+        """
+        message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), self.compress_support, self.protocol_version)
+        return self.write_bytes(bytes(message))
+
+    def write_bytes(self, message: bytes) -> Optional[asyncio.Future]:
+        """写入已序列化的消息, 不等待 flush; 写缓冲积压超过高水位时返回 future, 否则返回 None"""
+        try:
+            future = self._write_nowait(message)
+        except WebSocketClosedError:
+            LoggerFactory.get_logger().info(f'forward to closed websocket {self.client_name}, drop')
+            return None
+        if self._pending_write_bytes > WRITE_BUFFER_HIGH_WATER:
+            return future
+        return None
+
+    def send_flow_control(self, uid: bytes, pause: bool):
+        """通知客户端暂停/恢复读取该 uid 的本地数据源"""
+        if not self.flow_control_support:
+            return
+        type_ = MessageTypeConstant.FLOW_PAUSE if pause else MessageTypeConstant.FLOW_RESUME
+        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+            LoggerFactory.get_logger().debug(f'send {"pause" if pause else "resume"} to {self.client_name}, uid: {uid.hex()}')
+        self.forward_message({'type_': type_, 'data': {'uid': uid}})
+
+    @staticmethod
+    async def wait_backpressure(future: Optional[asyncio.Future], target: str):
+        if future is None:
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(future), WRITE_DRAIN_TIMEOUT)
+        except asyncio.TimeoutError:
+            LoggerFactory.get_logger().warning(f'{target} write buffer not drained in {WRITE_DRAIN_TIMEOUT}s, continue')
+        except Exception:
+            pass
+
+    async def on_message(self, m_bytes):
+        # tornado 会等待该协程完成后再读下一帧, 保证同一 websocket 上的消息按顺序处理
         try:
             await self.on_message_async(m_bytes)
-        finally:
-            self._msg_sem.release()
+        except (InvalidPassword, SignatureError, ReplayError):
+            pass  # on_message_async 中已关闭连接
 
     async def on_message_async(self, message):
         tcp_forward_client = TcpForwardClient.get_instance()
@@ -163,30 +215,27 @@ class MyWebSocketaHandler(WebSocketHandler):
                 if is_c2c:
                     source_handler, target_handler, rule_name, protocol, target_ip_port = self.c2c_uid_to_routing[uid]
 
+                    drain_future = None
+                    peer_handler = None
                     if self == source_handler:
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
-                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support, target_handler.protocol_version)
-                            await target_handler.write_message(message, binary=True)
-                        else:
-                            await target_handler.write_message(
-                                NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                       target_handler.compress_support, target_handler.protocol_version),
-                                binary=True
-                            )
+                        peer_handler = target_handler
                     elif self == target_handler:
-                        await source_handler.write_message(
-                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support, source_handler.protocol_version),
-                            binary=True
-                        )
+                        peer_handler = source_handler
+                    if peer_handler:
+                        drain_future = peer_handler.forward_message(message_dict)
 
                     if not data['data']:
                         async with self.c2c_lock:
                             self.c2c_uid_to_routing.pop(uid, None)
                             LoggerFactory.get_logger().info(f'C2C 连接关闭 UID: {uid.hex()}')
+                    if drain_future:
+                        await self.wait_backpressure(drain_future, peer_handler.client_name)
                 else:
-                    await tcp_forward_client.send_to_socket(uid, data['data'])
+                    drain_future = tcp_forward_client.enqueue_send(uid, data['data'])
+                    if drain_future:
+                        await self.wait_backpressure(drain_future, f'uid {uid.hex()}')
 
             elif message_dict['type_'] == MessageTypeConstant.WEBSOCKET_OVER_UDP:
                 data: TcpOverWebsocketMessage = message_dict['data']
@@ -213,20 +262,9 @@ class MyWebSocketaHandler(WebSocketHandler):
                     if self == source_handler:
                         if not data.get('ip_port'):
                             data['ip_port'] = target_ip_port
-                            message = NatSerialization.dumps(message_dict, ContextUtils.get_password(), target_handler.compress_support, target_handler.protocol_version)
-                            await target_handler.write_message(message, binary=True)
-                        else:
-                            await target_handler.write_message(
-                                NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                       target_handler.compress_support, target_handler.protocol_version),
-                                binary=True
-                            )
+                        target_handler.forward_message(message_dict)  # UDP 不做背压, 积压时由 tornado 缓冲
                     elif self == target_handler:
-                        await source_handler.write_message(
-                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support, source_handler.protocol_version),
-                            binary=True
-                        )
+                        source_handler.forward_message(message_dict)
                 else:
                     port = 0
                     for p, srv in list(UdpForwardClient.get_instance().udp_servers.items()):
@@ -254,6 +292,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                     push_config: PushConfigEntity = message_dict['data']
                     client_name = push_config['client_name']
                     self.version = push_config.get('version')
+                    self.flow_control_support = bool(push_config.get('flow_control', False))
 
                     # self.p2p_supported = push_config.get('p2p_supported', False)
                     self.p2p_supported = False
@@ -335,10 +374,22 @@ class MyWebSocketaHandler(WebSocketHandler):
                     message_dict['data']['client_to_client_rules'] = client_c2c_rules
                     LoggerFactory.get_logger().info(f'send {len(client_c2c_rules)} C2C to {client_name}')
 
+                    # 用单独的字段声明服务端支持流控, 旧服务端会原样回显客户端的 flow_control 字段
+                    message_dict['data']['server_flow_control'] = True
                     message_dict['data']['public_ip'] = self.public_ip
                     message_dict['data']['public_port'] = self.public_port
 
                 await self.write_message(NatSerialization.dumps(message_dict, key, self.compress_support, self.protocol_version), binary=True)
+
+            elif message_dict['type_'] in (MessageTypeConstant.FLOW_PAUSE, MessageTypeConstant.FLOW_RESUME):
+                uid = message_dict['data']['uid']
+                pause = message_dict['type_'] == MessageTypeConstant.FLOW_PAUSE
+                if uid in self.c2c_uid_to_routing:
+                    pass  # C2C 流控转发尚未实现, 依赖 websocket 级背压
+                else:
+                    conn = tcp_forward_client.uid_to_connection.get(uid)
+                    if conn and conn.socket_server.websocket_handler == self:
+                        tcp_forward_client.set_public_reading_paused(conn, pause)
 
             elif message_dict['type_'] == MessageTypeConstant.PING:
                 self.recv_time = time.time()
@@ -350,28 +401,16 @@ class MyWebSocketaHandler(WebSocketHandler):
                 if uid in self.c2c_uid_to_routing:
                     source_handler, target_handler, rule_name, protocol, _ = self.c2c_uid_to_routing[uid]
                     if self == target_handler:
-                        await source_handler.write_message(
-                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support, source_handler.protocol_version),
-                            binary=True
-                        )
+                        source_handler.forward_message(message_dict)
                 elif uid in tcp_forward_client.uid_to_connection:
                     connection = tcp_forward_client.uid_to_connection[uid]
-                    connection.connection_confirmed = True
-
-                    for buffered_data in connection.early_data_buffer:
-                        if buffered_data:
-                            send_message: MessageEntity = {
-                                'type_': MessageTypeConstant.WEBSOCKET_OVER_TCP,
-                                'data': {
-                                    'name': connection.socket_server.name,
-                                    'data': buffered_data,
-                                    'uid': uid,
-                                    'ip_port': connection.socket_server.ip_port
-                                }
-                            }
-                            await self.write_message(NatSerialization.dumps(send_message, ContextUtils.get_password(), self.compress_support, self.protocol_version), binary=True)
-                    connection.early_data_buffer.clear()
+                    with connection.early_data_lock:
+                        connection.connection_confirmed = True
+                        early_data_bytes = connection.early_data_bytes
+                    LoggerFactory.get_logger().info(
+                        f'connect confirmed uid: {uid.hex()}, flushing {early_data_bytes} bytes, {connection.stats()}')
+                    # 单独的任务 flush: 背压等待不能阻塞本 websocket 后续消息的处理
+                    asyncio.ensure_future(tcp_forward_client.flush_early_data(connection))
 
             elif message_dict['type_'] == MessageTypeConstant.CONNECT_FAILED:
                 data: TcpOverWebsocketMessage = message_dict['data']
@@ -381,17 +420,13 @@ class MyWebSocketaHandler(WebSocketHandler):
                 if uid in self.c2c_uid_to_routing:
                     source_handler, target_handler, rule_name, protocol, _ = self.c2c_uid_to_routing[uid]
                     if self == target_handler:
-                        await source_handler.write_message(
-                            NatSerialization.dumps(message_dict, ContextUtils.get_password(),
-                                                   source_handler.compress_support, source_handler.protocol_version),
-                            binary=True
-                        )
+                        source_handler.forward_message(message_dict)
                     async with self.c2c_lock:
                         self.c2c_uid_to_routing.pop(uid, None)
                         LoggerFactory.get_logger().info(f'C2C 连接失败并已清理 UID: {uid.hex()}')
                 elif uid in tcp_forward_client.uid_to_connection:
                     connection = tcp_forward_client.uid_to_connection[uid]
-                    await tcp_forward_client.close_connection_async(connection)
+                    await tcp_forward_client.close_connection_async(connection, 'client CONNECT_FAILED')
 
             # Client-to-client forward request
             elif message_dict['type_'] == MessageTypeConstant.CLIENT_TO_CLIENT_FORWARD:
@@ -466,10 +501,7 @@ class MyWebSocketaHandler(WebSocketHandler):
                         'speed_limit': speed_limit  # 传递限速配置给目标客户端
                     }
                 }
-                await target_handler.write_message(
-                    NatSerialization.dumps(forward_message, ContextUtils.get_password(), target_handler.compress_support, target_handler.protocol_version),
-                    binary=True
-                )
+                target_handler.forward_message(forward_message)
                 LoggerFactory.get_logger().info(f'Connection request forwarded to target client {target_client}, speed_limit: {speed_limit}')
 
             if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):

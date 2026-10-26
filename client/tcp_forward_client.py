@@ -9,7 +9,7 @@ from typing import Dict, List
 
 from common.logger_factory import LoggerFactory
 from common.nat_serialization import NatSerialization
-from common.pool import SelectPool
+from common.pool import SelectPool, PAUSE_REASON_FLOW_CONTROL
 from common.register_append_data import ResisterAppendData
 from common.speed_limit import SpeedLimiter
 from constant.message_type_constnat import MessageTypeConstant
@@ -24,6 +24,9 @@ class PrivateSocketConnection:
         self.uid: bytes = uid
         self.socket: socket.socket = s
         self.name: str = name
+        self.bytes_recv: int = 0
+        self.bytes_sent: int = 0
+        self.create_time: float = time.time()
 
 
 class TcpForwardClient:
@@ -35,6 +38,7 @@ class TcpForwardClient:
         self.ws = ws_sender  # WsSender — thread-safe, send via IOLoop.add_callback
         self.lock = Lock()
         self.socket_event_loop = SelectPool()
+        self.flow_control_enabled = False  # 服务端是否支持按连接流控, 由 PUSH_CONFIG 协商
 
         # C2C client-to-client forward state
         self.c2c_rules: List[dict] = []
@@ -48,6 +52,10 @@ class TcpForwardClient:
         self.pending_data: Dict[bytes, list] = {}
         self.pending_data_lock = Lock()
         self.pending_data_timeout = 10
+
+        # 已关闭的 uid -> 关闭时间；服务端的关闭通知晚于本地关闭时，避免为旧 uid 重建后端连接
+        self.recently_closed: Dict[bytes, float] = {}
+        self.recently_closed_ttl = 60
 
     def set_running(self, running: bool):
         self.socket_event_loop.is_running = running
@@ -170,8 +178,17 @@ class TcpForwardClient:
 
         try:
             recv = each.recv(data.read_size)
-        except OSError:
+        except OSError as e:
+            LoggerFactory.get_logger().info('recv error uid: %s, %s: %s (errno=%s), sent=%d recv=%d, alive=%.3fs' % (
+                connection.uid.hex(), type(e).__name__, e, getattr(e, 'errno', None),
+                connection.bytes_sent, connection.bytes_recv, time.time() - connection.create_time))
             recv = b''
+        else:
+            if recv:
+                connection.bytes_recv += len(recv)
+            else:
+                LoggerFactory.get_logger().info('recv EOF from local uid: %s, sent=%d recv=%d, alive=%.3fs' % (
+                    connection.uid.hex(), connection.bytes_sent, connection.bytes_recv, time.time() - connection.create_time))
 
         if data.speed_limiter and recv:
             wait_time = data.speed_limiter.acquire(len(recv))
@@ -211,6 +228,9 @@ class TcpForwardClient:
         with self.lock:
             if uid in self.uid_to_socket_connection:
                 return True
+            if uid in self.recently_closed:
+                LoggerFactory.get_logger().info('ignore data for closed uid: %s' % uid.hex())
+                return False
             try:
                 if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
                     LoggerFactory.get_logger().debug('create socket %s, %s' % (name, uid))
@@ -227,6 +247,7 @@ class TcpForwardClient:
                 ip, port = ip_port.split(':')
                 try:
                     s.connect((ip, int(port)))
+                    LoggerFactory.get_logger().info('connected uid: %s, local %s -> %s' % (uid.hex(), s.getsockname(), ip_port))
 
                     confirm_message: MessageEntity = {
                         'type_': MessageTypeConstant.CONNECT_CONFIRMED,
@@ -286,6 +307,9 @@ class TcpForwardClient:
         LoggerFactory.get_logger().info('Closing socket %s' % socket_client)
         if socket_client in self.socket_to_socket_connection:
             connection: PrivateSocketConnection = self.socket_to_socket_connection.pop(socket_client)
+            LoggerFactory.get_logger().info('close uid: %s, sent=%d recv=%d, alive=%.3fs' % (
+                connection.uid.hex(), connection.bytes_sent, connection.bytes_recv, time.time() - connection.create_time))
+            self._mark_closed(connection.uid)
             self.socket_event_loop.unregister(socket_client)
             try:
                 socket_client.shutdown(socket.SHUT_RDWR)
@@ -296,6 +320,13 @@ class TcpForwardClient:
             if connection.uid in self.uid_to_socket_connection:
                 self.uid_to_socket_connection.pop(connection.uid)
             self.close_remote_socket(connection)
+
+    def _mark_closed(self, uid: bytes):
+        now = time.time()
+        self.recently_closed[uid] = now
+        if len(self.recently_closed) > 1000:
+            for k in [k for k, t in self.recently_closed.items() if now - t > self.recently_closed_ttl]:
+                self.recently_closed.pop(k, None)
 
     def close(self):
         LoggerFactory.get_logger().info('Starting to close %s' % self.c2c_listeners)
@@ -352,6 +383,18 @@ class TcpForwardClient:
         )
         LoggerFactory.get_logger().debug('Send to websocket cost time %s' % (time.time() - start_time))
 
+    def set_local_reading_paused(self, uid: bytes, pause: bool):
+        """服务端通知该 uid 积压过多, 暂停/恢复读取本地连接"""
+        connection = self.uid_to_socket_connection.get(uid)
+        if not connection:
+            return
+        if LoggerFactory.get_logger().isEnabledFor(logging.DEBUG):
+            LoggerFactory.get_logger().debug('flow control %s uid: %s' % ('pause' if pause else 'resume', uid.hex()))
+        if pause:
+            self.socket_event_loop.pause_reading(connection.socket, PAUSE_REASON_FLOW_CONTROL)
+        else:
+            self.socket_event_loop.resume_reading(connection.socket, PAUSE_REASON_FLOW_CONTROL)
+
     def send_by_uid(self, uid: bytes, msg: bytes):
         connection = self.uid_to_socket_connection.get(uid)
         if not connection:
@@ -369,7 +412,9 @@ class TcpForwardClient:
             s.settimeout(30)
             s.sendall(msg)
             s.settimeout(None)
+            connection.bytes_sent += len(msg)
             if not msg:
+                LoggerFactory.get_logger().info('server requested close uid: %s' % connection.uid.hex())
                 self.close_connection(s)
         except socket.timeout:
             LoggerFactory.get_logger().warning('sendall timeout, closing uid: %s' % connection.uid.hex())
