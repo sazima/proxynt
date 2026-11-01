@@ -9,6 +9,13 @@
                 <el-form-item label="密码 " :label-width="formLabelWidth">
                     <el-input v-model="form.password" autocomplete="off" @keyup.enter.native="handleLogin" type="password"></el-input>
                 </el-form-item>
+                <el-form-item label="验证码 " :label-width="formLabelWidth">
+                    <div style="display: flex; align-items: center;">
+                        <el-input v-model="form.captcha" autocomplete="off" @keyup.enter.native="handleLogin" maxlength="4" style="width: 140px;"></el-input>
+                        <img :src="captchaUrl" @click="refreshCaptcha" title="看不清? 点击刷新" alt="验证码"
+                             style="height: 40px; margin-left: 10px; cursor: pointer; border-radius: 4px;">
+                    </div>
+                </el-form-item>
             </el-form>
         </el-col>
         <el-col :span="12">
@@ -25,23 +32,33 @@
             return {
                 formLabelWidth: '120px',
                 form: {
-                    password: ''
-                }
+                    password: '',
+                    captcha: ''
+                },
+                captchaUrl: ''
             }
         },
         mounted() {
+            this.refreshCaptcha()
         },
         methods: {
+            refreshCaptcha() {
+                this.form.captcha = ''
+                this.captchaUrl = window.location.pathname + '?captcha=1&t=' + Date.now()
+            },
             handleLogin() {
                 const url = window.location.href
 
                 axios.post(url, this.form).then(res=> {
                     if (res.data.code !== 200) {
+                        // 验证码只能用一次, 失败后换新的
+                        this.refreshCaptcha()
                         return alert(res.data.msg)
                     }
                     location.reload();
                 }).catch(err => {
                     console.log(err)
+                    this.refreshCaptcha()
                     alert('服务器出现错误')
                 })
 

@@ -7,6 +7,7 @@ from typing import List, Set, Tuple
 
 from tornado.web import RequestHandler
 
+from common.captcha import CaptchaStore, LoginLimiter
 from common.logger_factory import LoggerFactory
 from constant.system_constant import SystemConstant
 from context.context_utils import ContextUtils
@@ -17,25 +18,69 @@ from server.websocket_handler import MyWebSocketaHandler
 
 # todo: 身份认证
 COOKIE_KEY = 'c'
+CAPTCHA_COOKIE_KEY = 'cid'
 MIN_PORT = 1000
 NOT_LOGIN = 401
+
+captcha_store = CaptchaStore()
+login_limiter = LoginLimiter()
+
+
+def is_login(handler: RequestHandler) -> bool:
+    cookie_dict = ContextUtils.get_cookie_to_time()
+    result = handler.get_cookie(COOKIE_KEY)
+    return result in cookie_dict and time.time() - cookie_dict[result] < SystemConstant.COOKIE_EXPIRE_SECONDS
+
+
+def get_client_ip(handler: RequestHandler) -> str:
+    """只有经本机反向代理 (nginx) 转发时才信任 X-Real-IP, 防止直连时伪造请求头绕过失败锁定"""
+    remote_ip = handler.request.remote_ip
+    if remote_ip in ('127.0.0.1', '::1'):
+        return handler.request.headers.get('X-Real-IP') or remote_ip
+    return remote_ip
 
 
 class AdminHtmlHandler(RequestHandler):
     async def get(self):
-        result = self.get_cookie(COOKIE_KEY)
-        cookie_dict = ContextUtils.get_cookie_to_time()
-        if result in cookie_dict and time.time() - cookie_dict[result] < SystemConstant.COOKIE_EXPIRE_SECONDS:
+        if self.get_argument('captcha', ''):
+            captcha_id, svg = captcha_store.create()
+            self.set_cookie(CAPTCHA_COOKIE_KEY, captcha_id, httponly=True)
+            self.set_header('Content-Type', 'image/svg+xml')
+            self.set_header('Cache-Control', 'no-store')
+            self.write(svg)
+            return
+        if is_login(self):
             self.render('ele_index.html')
         else:
             self.render('login.html')
 
     async def post(self):
         try:
+            ip = get_client_ip(self)
+            locked_seconds = login_limiter.locked_seconds(ip)
+            if locked_seconds:
+                self.write({
+                    'code': 400,
+                    'data': '',
+                    'msg': f'失败次数过多, 请 {locked_seconds} 秒后再试'
+                })
+                return
             body_data = json.loads(self.request.body)
-            password = body_data['password']
+            password = body_data.get('password', '')
+            captcha = body_data.get('captcha', '')
+            # 不管对错, 验证码只能用一次
+            captcha_ok = captcha_store.verify(self.get_cookie(CAPTCHA_COOKIE_KEY), captcha)
+            self.clear_cookie(CAPTCHA_COOKIE_KEY)
+            if not captcha_ok:
+                self.write({
+                    'code': 400,
+                    'data': '',
+                    'msg': '验证码错误或已过期'
+                })
+                return
             admin_config = ContextUtils.get_admin_config()
             if admin_config and admin_config['admin_password'] == password:
+                login_limiter.record_success(ip)
                 cookie_value = base64.b64encode(os.urandom(64)).decode()
                 cookie_dict = ContextUtils.get_cookie_to_time()
                 cookie_dict[cookie_value] = time.time()
@@ -46,10 +91,12 @@ class AdminHtmlHandler(RequestHandler):
                     'msg': ''
                 })
             else:
+                remain = login_limiter.record_failure(ip)
+                LoggerFactory.get_logger().warning(f'admin login failed from {ip}, remain attempts: {remain}')
                 self.write({
                     'code': 400,
                     'data': '',
-                    'msg': '密码错误'
+                    'msg': f'密码错误, 还可尝试 {remain} 次' if remain else '密码错误次数过多, 请稍后再试'
                 })
         except Exception:
             LoggerFactory.get_logger().error(traceback.format_exc())
@@ -57,6 +104,14 @@ class AdminHtmlHandler(RequestHandler):
 
 class ShowVariableHandler(RequestHandler):
     def get(self):
+        if not is_login(self):
+            self.set_status(NOT_LOGIN)
+            self.write({
+                'code': NOT_LOGIN,
+                'data': '',
+                'msg': '未登录'
+            })
+            return
         forward_client = TcpForwardClient.get_instance()
         dict_ = forward_client.__dict__
         self.write({

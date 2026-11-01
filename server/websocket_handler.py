@@ -63,6 +63,8 @@ class MyWebSocketaHandler(WebSocketHandler):
         cls.c2c_lock = asyncio.Lock()
 
     def open(self, *args: str, **kwargs: str):
+        # 关闭 Nagle: 否则小包要等上一个包的 ACK, 每个方向多出约一个 RTT 的延迟
+        self.set_nodelay(True)
         self.lock = Lock()
         self._pending_write_bytes = 0
         self.client_name = None

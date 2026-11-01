@@ -402,6 +402,8 @@ async def connect_loop(url, client, processor):
                 on_message_callback=on_message,
                 connect_timeout=10,
             )
+            # 关闭 Nagle: 否则小包要等上一个包的 ACK, 每个方向多出约一个 RTT 的延迟
+            ws_conn.protocol.set_nodelay(True)
             client.ws_sender.set_connection(ws_conn, io)
             client.on_open()
             await close_future
