@@ -43,6 +43,7 @@ def get_client_ip(handler: RequestHandler) -> str:
 class AdminHtmlHandler(RequestHandler):
     async def get(self):
         if self.get_argument('captcha', ''):
+            captcha_store.discard(self.get_cookie(CAPTCHA_COOKIE_KEY))  # 删掉该用户上一张验证码
             captcha_id, svg = captcha_store.create()
             self.set_cookie(CAPTCHA_COOKIE_KEY, captcha_id, httponly=True)
             self.set_header('Content-Type', 'image/svg+xml')
