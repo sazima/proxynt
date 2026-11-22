@@ -41,7 +41,10 @@ def get_client_ip(handler: RequestHandler) -> str:
 
 
 class AdminHtmlHandler(RequestHandler):
-    async def get(self):
+    def initialize(self, admin_base_path):
+        self.admin_base_path = admin_base_path
+
+    async def get(self, version=None):
         if self.get_argument('captcha', ''):
             captcha_store.discard(self.get_cookie(CAPTCHA_COOKIE_KEY))  # 删掉该用户上一张验证码
             captcha_id, svg = captcha_store.create()
@@ -50,12 +53,16 @@ class AdminHtmlHandler(RequestHandler):
             self.set_header('Cache-Control', 'no-store')
             self.write(svg)
             return
+        if version is None:
+            self.redirect(self.admin_base_path + '/v2', permanent=False)
+            return
         if is_login(self):
-            self.render('ele_index.html')
+            template = 'ele_index.html' if version == 'v1' else 'admin_v2.html'
+            self.render(template, admin_base_path=self.admin_base_path)
         else:
             self.render('login.html')
 
-    async def post(self):
+    async def post(self, version=None):
         try:
             ip = get_client_ip(self)
             locked_seconds = login_limiter.locked_seconds(ip)

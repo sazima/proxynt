@@ -1,0 +1,80 @@
+    /* 只布局，输入、表格、菜单、弹窗沿用现有 Element UI。 */
+    :root { --bg: #fff; --side: #fafafa; --fg: #303133; --muted: #909399; --line: #e6e6e6; --online: #529b38; color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 Arial, "Microsoft YaHei", sans-serif; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+    [v-cloak] { display: none !important; }
+    #app { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+    .header { height: 56px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+    .header strong { font-size: 18px; font-weight: 600; }
+    .muted { color: var(--muted); }
+    .layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; }
+    aside { display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); min-width: 0; min-height: 0; }
+    .side-search { display: flex; align-items: center; gap: 8px; padding: 20px 12px 12px; flex-shrink: 0; }
+    .side-search > .el-input { flex: 1; min-width: 0; }
+    .client-status { width: 100px; flex-shrink: 0; }
+    .client-menu { flex: 1; min-height: 0; overflow-y: auto; border-right: 0; background: transparent; }
+    .client-menu .el-menu-item { display: flex; align-items: center; gap: 12px; min-height: 56px; height: auto; padding: 14px 20px !important; line-height: 1.5; white-space: normal; font-size: 18px; }
+    .client-details { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+    .client-name { overflow-wrap: anywhere; min-width: 0; line-height: 1.5; }
+    .client-version { font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+    .client-state { margin-left: auto; flex-shrink: 0; }
+    .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    .dot.online { background: var(--online); }
+    main { display: flex; flex-direction: column; padding: 0 24px 16px; min-width: 0; min-height: 0; }
+    main > :not(.table-wrap) { flex-shrink: 0; }
+    .heading { min-height: 76px; display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+    h1 { font-size: 22px; font-weight: 600; margin: 0; overflow-wrap: anywhere; min-width: 0; }
+    .heading-state { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 6px 0 16px; }
+    .rule-search { width: 320px; max-width: 100%; }
+    .protocol-select { width: 145px; }
+    .add-button { margin-left: auto; }
+    /* Element UI 根据剩余高度计算表体高度，表头和分页不随表体滚动。 */
+    .table-wrap { flex: 1; min-height: 0; overflow: hidden; }
+    .el-table .cell { word-break: normal; line-height: 26px; }
+    .address { font-family: Consolas, "Liberation Mono", monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .target-client { display: inline-flex; align-items: center; gap: 7px; }
+    .pagination { display: flex; align-items: center; justify-content: flex-end; padding-top: 16px; overflow-x: auto; }
+    .pagination > * { flex-shrink: 0; }
+    .footnote { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
+    .editor { max-width: calc(100% - 32px); }
+    .editor .el-dialog__body { padding-top: 16px; }
+    .editor .el-form-item { margin-bottom: 20px; }
+    .editor .el-select, .editor .el-input-number { width: 100%; }
+    .editor .el-input-number .el-input__inner { text-align: left; }
+    .form-note { margin: 0; color: var(--muted); }
+    .dialog-footer { display: flex; justify-content: flex-end; align-items: center; gap: 12px; }
+    .dialog-footer .el-button + .el-button { margin-left: 0; }
+    .delete-button { margin-right: auto; }
+    .el-button:focus-visible, .el-menu-item:focus-visible { outline: 2px solid var(--online); outline-offset: -2px; }
+    /* 配置页优先可读性，不使用 Element UI 的小号文字。 */
+    body, .el-table, .el-input, .el-select, .el-button, .el-menu-item, .el-tabs__item,
+    .el-form-item__label, .el-form-item__content, .el-radio__label,
+    .el-select-dropdown__item, .el-message__content, .el-message-box__message { font-size: 16px; }
+    .muted, .client-state, .heading-state, .form-note,
+    .el-pagination, .el-pagination button, .el-pagination .el-pager li,
+    .el-tooltip__popper, .el-form-item__error { font-size: 14px; }
+    .el-input__inner { height: 44px; line-height: 44px; }
+    .el-input__icon { line-height: 44px; }
+    .el-button { padding: 12px 18px; }
+    .el-button--text { padding: 8px 0; }
+    .el-select-dropdown__item { min-height: 38px; line-height: 38px; }
+    @media (max-width: 900px) {
+      /* 矮屏允许布局区滚动，避免工具栏挤掉表体或遮住分页。 */
+      .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(140px, 25%) minmax(480px, 1fr); overflow-y: auto; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      .side-search { padding: 12px 10px 6px; }
+      main { padding-inline: 0; }
+      .heading { min-height: 60px; gap: 10px; }
+      .toolbar { gap: 10px; }
+      .rule-search { width: 100%; }
+      .pagination { flex-wrap: wrap; gap: 8px; }
+      .pagination .el-pagination { padding-inline: 0; }
+    }
+    @media (max-width: 600px) {
+      .editor .el-dialog__body { padding-inline: 16px; }
+      .editor .el-form-item__label { float: none; text-align: left; display: block; width: auto !important; }
+      .editor .el-form-item__content { margin-left: 0 !important; }
+    }
+    .refresh-error { margin-bottom: 16px; }
+    .el-dialog__headerbtn { font-size: 20px; }

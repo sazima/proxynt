@@ -15,7 +15,7 @@ class SystemConstant:
 
     COOKIE_EXPIRE_SECONDS = 3600 * 24
 
-    VERSION = '2.1.3'
+    VERSION = '2.1.6'
 
     GITHUB = 'https://github.com/sazima/proxynt'
 

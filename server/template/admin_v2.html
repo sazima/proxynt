@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Proxynt 管理</title>
+  <link rel="stylesheet" href="{{ static_url('css/index.css') }}">
+  <script src="{{ static_url('js/axios.min.js') }}"></script>
+  <script src="{{ static_url('js/vue.min.js') }}"></script>
+  <script src="{{ static_url('js/index.js') }}"></script>
+  <link rel="stylesheet" href="{{ static_url('css/admin_v2.css') }}">
+</head>
+<body>
+<div id="app" v-cloak>
+  <header class="header"><strong>Proxynt</strong><span class="muted">服务端 {[ serverVersion || '—' ]}</span></header>
+  <div class="layout">
+    <aside aria-label="客户端导航">
+      <div class="side-search">
+        <el-input id="client-search" v-model="clientSearch" placeholder="搜索" prefix-icon="el-icon-search" clearable aria-label="搜索客户端"></el-input>
+        <el-select id="client-status" class="client-status" v-model="clientStatus" aria-label="客户端状态"><el-option label="全部" value="all"></el-option><el-option label="在线" value="online"></el-option><el-option label="离线" value="offline"></el-option></el-select>
+      </div>
+      <el-menu class="client-menu" :default-active="selectedClient" @select="selectClient">
+        <el-menu-item index="all">全部</el-menu-item>
+        <el-menu-item v-for="client in visibleClients" :key="client.name" :index="client.name">
+          <span class="client-details"><span class="client-name">{[ client.name ]}</span><span class="client-version muted">{[ client.version || '版本未知' ]}</span></span><el-tag class="client-state" :type="client.online ? 'success' : 'info'">{[ client.online ? '在线' : '离线' ]}</el-tag>
+        </el-menu-item>
+      </el-menu>
+    </aside>
+    <main>
+      <el-alert v-if="error" class="refresh-error" :title="error" type="error" show-icon :closable="false" role="alert"></el-alert>
+      <div class="heading">
+        <el-tooltip :disabled="!currentClient || searchScope === 'global'" :content="currentClient && currentClient.version ? '客户端 ' + currentClient.version : '版本未知'" placement="top"><h1 tabindex="0">{[ searchScope === 'global' ? '全局搜索' : selectedClient === 'all' ? '全部' : selectedClient ]}</h1></el-tooltip>
+        <el-button v-if="searchScope === 'global'" type="text" @click="changeScope('current')">返回{[ selectedClient === 'all' ? '全部' : selectedClient ]}</el-button>
+        <template v-if="currentClient && searchScope !== 'global'"><span class="heading-state"><span class="dot" :class="{online: currentClient.online}"></span>{[ currentClient.online ? '在线' : '离线' ]}</span></template>
+      </div>
+      <el-tabs v-show="searchScope !== 'global'" v-model="activeTab" @tab-click="page = 1">
+        <el-tab-pane :label="'转发 (' + scopedForward.length + ')'" name="forward"></el-tab-pane>
+        <el-tab-pane :label="'C2C (' + scopedC2c.length + ')'" name="c2c"></el-tab-pane>
+      </el-tabs>
+      <div class="toolbar">
+        <el-input id="rule-search" class="rule-search" v-model="search" placeholder="名称 / IP / 端口" prefix-icon="el-icon-search" clearable aria-label="搜索规则" @input="page = 1"></el-input>
+        <el-select id="search-scope" :value="searchScope" style="width:150px" aria-label="搜索范围" @change="changeScope"><el-option label="当前" value="current"></el-option><el-option label="全局" value="global"></el-option></el-select>
+        <el-select id="protocol-filter" class="protocol-select" v-model="protocol" aria-label="协议" @change="page = 1"><el-option label="全部协议" value="all"></el-option><el-option label="TCP" value="tcp"></el-option><el-option label="UDP" value="udp"></el-option></el-select>
+        <el-tooltip v-if="searchScope === 'global'" content="搜索全部转发和 C2C。数字精确匹配端口；结果为配置引用，不代表实际占用。" placement="top"><el-button type="text" icon="el-icon-question" aria-label="全局搜索说明"></el-button></el-tooltip>
+        <el-button v-if="searchScope !== 'global'" class="add-button" :disabled="saving" type="primary" icon="el-icon-plus" @click="openEditor()">新增</el-button>
+      </div>
+      <div v-if="searchScope !== 'global' && search.trim() && !filteredRows.length" style="padding:12px 0"><el-button type="text" @click="changeScope('global')">全局搜索「{[ search ]}」</el-button></div>
+      <div class="table-wrap">
+        <el-table v-if="searchScope === 'global'" height="100%" :data="pageRows" row-key="key" empty-text="没有匹配的配置" style="width:100%">
+          <el-table-column label="类型" width="100"><template slot-scope="scope">{[ scope.row.type === 'forward' ? '转发' : 'C2C' ]}</template></el-table-column>
+          <el-table-column label="名称" min-width="190"><template slot-scope="scope"><el-button type="text" @click="openEditor(scope.row.rule, scope.row.type)">{[ scope.row.rule.name ]}</el-button></template></el-table-column>
+          <el-table-column label="客户端" min-width="160"><template slot-scope="scope"><el-button type="text" @click="goToClient(scope.row.rule.client, scope.row.type)">{[ scope.row.rule.client ]}</el-button><template v-if="scope.row.type === 'c2c'"> → <el-button type="text" @click="goToClient(scope.row.rule.target, 'forward')">{[ scope.row.rule.target ]}</el-button></template></template></el-table-column>
+          <el-table-column label="匹配位置 / 地址" min-width="300"><template slot-scope="scope"><div v-for="match in scope.row.matches" :key="match">{[ match ]}</div></template></el-table-column>
+          <el-table-column label="协议" width="80"><template slot-scope="scope">{[ scope.row.rule.protocol.toUpperCase() ]}</template></el-table-column>
+          <el-table-column label="操作" width="90"><template slot-scope="scope"><span v-if="scope.row.type === 'forward' && scope.row.rule.source === 'client'" class="muted">只读</span><el-button v-else type="text" @click="openEditor(scope.row.rule, scope.row.type)">编辑</el-button></template></el-table-column>
+        </el-table>
+        <el-table v-else height="100%" :key="activeTab + selectedClient" :data="pageRows" row-key="id" @filter-change="filterChanged" empty-text="没有匹配的规则" style="width: 100%">
+          <el-table-column prop="name" label="名称" min-width="180" show-overflow-tooltip></el-table-column>
+          <el-table-column v-if="selectedClient === 'all'" prop="client" :label="activeTab === 'c2c' ? '源客户端' : '所属客户端'" min-width="120"></el-table-column>
+          <el-table-column v-if="activeTab === 'forward'" key="remote" prop="remote" label="远程端口" width="110"><template slot-scope="scope"><span class="address">{[ scope.row.remote ]}</span></template></el-table-column>
+          <el-table-column :label="activeTab === 'c2c' ? '本地监听' : '本地地址'" min-width="200"><template slot-scope="scope"><span class="address">{[ scope.row.ip ]}:{[ scope.row.port ]}</span></template></el-table-column>
+          <el-table-column v-if="activeTab === 'c2c'" key="target" label="目标客户端" min-width="130"><template slot-scope="scope"><el-tooltip :content="isOnline(scope.row.target) ? '目标客户端在线，不代表转发链路已连通' : '目标客户端离线'" placement="top"><span class="target-client"><span class="dot" :class="{online: isOnline(scope.row.target)}" aria-hidden="true"></span>{[ scope.row.target ]}</span></el-tooltip></template></el-table-column>
+          <el-table-column v-if="activeTab === 'c2c'" key="target-address" label="目标地址 / 服务" min-width="200"><template slot-scope="scope"><span class="address">{[ scope.row.mode === 'service' ? '服务 ' + scope.row.service : scope.row.targetIp + ':' + scope.row.targetPort ]}</span></template></el-table-column>
+          <el-table-column label="协议" width="80"><template slot-scope="scope">{[ scope.row.protocol.toUpperCase() ]}</template></el-table-column>
+          <el-table-column label="限速" width="110"><template slot-scope="scope">{[ scope.row.speed ? scope.row.speed + ' MB' : '不限速' ]}</template></el-table-column>
+          <el-table-column v-if="activeTab === 'c2c'" key="enabled" column-key="enabled" label="启用" width="100" :filters="[{text:'启用',value:'yes'},{text:'停用',value:'no'}]" :filter-multiple="false" :filtered-value="enabledFilter === 'all' ? [] : [enabledFilter]" ><template slot-scope="scope">{[ scope.row.enabled ? '是' : '否' ]}</template></el-table-column>
+          <el-table-column label="操作" width="90"><template slot-scope="scope"><el-tooltip v-if="activeTab === 'forward' && scope.row.source === 'client'" content="客户端配置，只读。请在客户端配置文件中修改。" placement="top"><span class="muted" style="font-size:14px">只读</span></el-tooltip><el-button v-else type="text" @click="openEditor(scope.row)">编辑</el-button></template></el-table-column>
+        </el-table>
+      </div>
+      <div class="pagination"><el-pagination :current-page="page" :page-size="pageSize" :page-sizes="[5, 20, 50]" :total="filteredRows.length" layout="total, prev, pager, next" @current-change="page = $event"></el-pagination><el-select id="page-size" v-model="pageSize" style="width:120px;margin-left:12px" aria-label="每页条数" @change="page = 1"><el-option v-for="size in [5,20,50]" :key="size" :label="size + ' 条 / 页'" :value="size"></el-option></el-select></div>
+      <div class="footnote"><el-button type="text" :disabled="refreshing || saving" :loading="refreshing" @click="refresh">刷新</el-button></div>
+    </main>
+  </div>
+  <el-dialog :title="(editingId ? '编辑' : '新增') + (editorType === 'forward' ? '转发配置' : ' C2C 规则')" :visible.sync="editorVisible" width="600px" custom-class="editor" :close-on-click-modal="false" :before-close="closeEditor" :close-on-press-escape="!saving" :show-close="!saving" @closed="clearFormValidation">
+    <el-form ref="ruleForm" :model="form" :disabled="saving" :rules="formRules" label-width="120px" @submit.native.prevent>
+      <el-form-item label="规则名称" prop="name"><el-input id="form-name" v-model="form.name" :disabled="!!editingId" maxlength="80"></el-input></el-form-item>
+      <el-form-item :label="editorType === 'c2c' ? '源客户端' : '所属客户端'" prop="client"><el-select id="form-client" v-model="form.client" :disabled="!!editingId" @change="sourceClientChanged"><el-option v-for="client in clients" :key="client.name" :label="client.name" :value="client.name"></el-option></el-select></el-form-item>
+      <el-form-item v-if="editorType === 'forward'" label="远程端口" prop="remote"><el-input-number id="form-remote" v-model="form.remote" :min="1000" :max="65535" :precision="0" :controls="false"></el-input-number></el-form-item>
+      <el-form-item :label="editorType === 'c2c' ? '本地监听 IP' : '本地 IP'" prop="ip"><el-input id="form-ip" v-model="form.ip"></el-input></el-form-item>
+      <el-form-item :label="editorType === 'c2c' ? '本地监听端口' : '本地端口'" prop="port"><el-input-number id="form-port" v-model="form.port" :min="1" :max="65535" :precision="0" :controls="false"></el-input-number></el-form-item>
+      <template v-if="editorType === 'c2c'">
+        <el-form-item label="目标客户端" prop="target"><el-select id="form-target" v-model="form.target" @change="form.service = ''"><el-option v-for="client in targetClients" :key="client.name" :label="client.name" :value="client.name"></el-option></el-select></el-form-item>
+        <el-form-item label="目标模式"><el-radio-group id="form-mode" v-model="form.mode" @change="clearFormValidation"><el-radio label="direct">指定地址</el-radio><el-radio label="service">已有服务</el-radio></el-radio-group></el-form-item>
+        <template v-if="form.mode === 'direct'"><el-form-item label="目标 IP" prop="targetIp"><el-input id="form-target-ip" v-model="form.targetIp"></el-input></el-form-item><el-form-item label="目标端口" prop="targetPort"><el-input-number id="form-target-port" v-model="form.targetPort" :min="1" :max="65535" :precision="0" :controls="false"></el-input-number></el-form-item></template>
+        <el-form-item v-else label="目标服务" prop="service"><el-select id="form-service" v-model="form.service" no-data-text="没有匹配协议的服务，请使用指定地址"><el-option v-if="form.service && !targetServices.some(s => s.name === form.service)" :label="form.service + '（当前引用）'" :value="form.service"></el-option><el-option v-for="service in targetServices" :key="service.id" :label="service.name" :value="service.name"></el-option></el-select></el-form-item>
+      </template>
+      <el-form-item label="协议"><el-select id="form-protocol" v-model="form.protocol" @change="form.service = ''"><el-option label="TCP" value="tcp"></el-option><el-option label="UDP" value="udp"></el-option></el-select></el-form-item>
+      <el-form-item label="限速（MB）" prop="speed"><el-input-number id="form-speed" v-model="form.speed" :min="0" :controls="false"></el-input-number><span class="muted">0 表示不限速</span></el-form-item>
+      <el-form-item v-if="editorType === 'c2c'" label="启用"><el-switch id="form-enabled" v-model="form.enabled" aria-label="启用规则"></el-switch></el-form-item>
+      <p class="form-note">修改或删除配置将触发相关客户端重新连接。</p>
+    </el-form>
+    <div slot="footer" class="dialog-footer"><el-button v-if="editingId" class="delete-button" :disabled="saving" type="danger" plain @click="deleteRule">删除规则</el-button><el-button :disabled="saving" @click="editorVisible = false">取消</el-button><el-button type="primary" :loading="saving" :disabled="saving" @click="saveRule">保存</el-button></div>
+  </el-dialog>
+</div>
+<script>window.adminBasePath = {% raw json_encode(admin_base_path) %};</script>
+<script src="{{ static_url('js/admin_v2.js') }}"></script>
+<script>new Vue(ProxyntAdminV2.options(axios, window.adminBasePath, function () { window.location.reload(); }));</script>
+</body>
+</html>

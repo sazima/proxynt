@@ -159,7 +159,8 @@ def main():
     MyWebSocketaHandler.init_locks()
     if admin_enable:
         handlers.extend([
-            (admin_html_path, AdminHtmlHandler),
+            (admin_html_path + r'/?', AdminHtmlHandler, {'admin_base_path': admin_html_path}),
+            (admin_html_path + r'/(v[12])/?', AdminHtmlHandler, {'admin_base_path': admin_html_path}),
             (admin_api_path, AdminHttpApiHandler),
             (admin_c2c_api_path, AdminC2CRuleHandler),
             (show_variable_path, ShowVariableHandler)
